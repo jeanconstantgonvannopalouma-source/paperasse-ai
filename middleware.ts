@@ -8,9 +8,9 @@ export async function middleware(request: NextRequest) {
     },
   });
 
-  const supabase = (
-    process.env.NEXT_PUBLIC_SUPAB_URL= "https://bhelthpmrjijpehsunro.supabase.com"
-    process.env.NEXT_PUBLIC_SUPAB_ANON_KEY= "sb_publishable_4zaSNMCINorMyAenu7YZig_Lh_POyjH"
+  const supabase = createServerClient(
+    process.env.NEXT_PUBLIC_SUPAB_URL ?? 'https://bhelthpmrjijpehsunro.supabase.com',
+    process.env.NEXT_PUBLIC_SUPAB_ANON_KEY ?? 'sb_publishable_4zaSNMCINorMyAenu7YZig_Lh_POyjH',
     {
       cookies: {
         get(name: string) {
@@ -33,7 +33,8 @@ export async function middleware(request: NextRequest) {
       },
     }
   );
-
+  
+  // Ceci déclanche la verification de session
   await supabase.auth.getUser();
 
   return response;
