@@ -9,6 +9,8 @@ import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import { Card, CardContent, CardDescription, CardFooter, CardHeader, CardTitle } from '@/components/ui/card'
 import { Loader2 } from 'lucide-react'
+import { signupSchema } from '@/lib/validation/schemas'
+import { validateRequest } from '@/lib/validation/schemas'
 
 export default function SignupPage() {
   const router = useRouter()
@@ -17,6 +19,7 @@ export default function SignupPage() {
   const [fullName, setFullName] = useState('')
   const [email, setEmail] = useState('')
   const [password, setPassword] = useState('')
+  const [termsAccepted, setTermsAccepted] = useState(false)
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const [success, setSuccess] = useState(false)
@@ -26,12 +29,29 @@ export default function SignupPage() {
     setLoading(true)
     setError(null)
 
-    const { data, error: signUpError } = await supabase.auth.signUp({
+    // Validation côté client avec le schema Zod
+    const validation = validateRequest(signupSchema, {
       email,
       password,
+      fullName,
+      termsAccepted,
+    })
+
+    if (!validation.success) {
+      // Afficher la première erreur trouvée
+      const failedValidation = validation as { success: false; errors: Record<string, string[]> };
+      const firstError = Object.values(failedValidation.errors)[0][0];
+      setError(firstError)
+      setLoading(false)
+      return
+    }
+
+    const { data, error: signUpError } = await supabase.auth.signUp({
+      email: validation.data.email,
+      password: validation.data.password,
       options: {
         data: {
-          full_name: fullName,
+          full_name: validation.data.fullName,
         },
       },
     })
@@ -126,10 +146,33 @@ export default function SignupPage() {
                 placeholder="••••••••"
                 value={password}
                 onChange={(e) => setPassword(e.target.value)}
-                minLength={6}
+                minLength={8}
                 required
               />
-              <p className="text-xs text-gray-500">Minimum 6 caractères</p>
+              <p className="text-xs text-gray-500">
+                Minimum 8 caractères avec au moins une majuscule, une minuscule, un chiffre et un caractère spécial
+              </p>
+            </div>
+
+            <div className="flex items-start space-x-3 space-y-0 mt-4">
+              <div className="flex items-center h-5">
+                <input
+                  id="termsAccepted"
+                  type="checkbox"
+                  checked={termsAccepted}
+                  onChange={(e) => setTermsAccepted(e.target.checked)}
+                  required
+                  className="h-4 w-4 text-blue-600 focus:ring-blue-500 border-gray-300 rounded"
+                />
+              </div>
+              <div className="ml-2">
+                <Label htmlFor="termsAccepted" className="text-sm text-gray-700">
+                  J'accepte les{' '}
+                  <Link href="/terms" className="text-blue-600 hover:underline">
+                    conditions générales d'utilisation
+                  </Link>
+                </Label>
+              </div>
             </div>
           </CardContent>
 
