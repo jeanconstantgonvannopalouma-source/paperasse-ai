@@ -2,7 +2,6 @@
 
 import { useState, useEffect } from 'react'
 import { useRouter } from 'next/navigation'
-import { createClient } from '@/lib/supabase/client'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
@@ -37,9 +36,10 @@ const VAT_REGIMES = [
   { value: 'standard', label: 'TVA applicable' },
 ]
 
+import { createClient } from '@/lib/supabase/client'
+
 export default function OnboardingPage() {
   const router = useRouter()
-  const supabase = createClient()
 
   const [userId, setUserId] = useState<string | null>(null)
   const [companyName, setCompanyName] = useState('')
@@ -53,6 +53,7 @@ export default function OnboardingPage() {
 
   useEffect(() => {
     async function checkUser() {
+      const supabase = createClient()
       const { data: { user } } = await supabase.auth.getUser()
 
       if (!user) {
@@ -65,17 +66,17 @@ export default function OnboardingPage() {
       // Vérifier si l'utilisateur a déjà une entreprise
       const { data: profile } = await supabase
         .from('profiles')
-        .select('company_id')
+        .select('organization_id')
         .eq('id', user.id)
         .single()
 
-      if (profile?.company_id) {
+      if (profile?.organization_id) {
         router.push('/dashboard')
       }
     }
 
     checkUser()
-  }, [supabase, router])
+  }, [router])
 
   async function handleSubmit(e: React.FormEvent) {
     e.preventDefault()
@@ -85,43 +86,59 @@ export default function OnboardingPage() {
     setLoading(true)
     setError(null)
 
-    // Créer l'entreprise
-    const { data: company, error: companyError } = await supabase
-      .from('companies')
-      .insert({
+    // Appeler l'API pour créer l'entreprise
+    const response = await fetch('/api/create-company', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({
         name: companyName,
         legal_form: legalForm || null,
         industry: industry || null,
         siret: siret || null,
         vat_regime: vatRegime,
         accountant_email: accountantEmail || null,
-      })
-      .select()
-      .single()
+        created_by: userId,
+      }),
+    })
 
-    if (companyError) {
-      setError('Erreur lors de la création de l\'entreprise')
+    const result = await response.json()
+
+    if (!response.ok) {
+      setError(result.error || 'Erreur lors de la création de l\'entreprise')
       setLoading(false)
       return
     }
 
-    // Associer l'entreprise au profil
-    const { error: profileError } = await supabase
-      .from('profiles')
-      .update({ company_id: company.id })
-      .eq('id', userId)
+    const company = result.data
 
-    if (profileError) {
-      setError('Erreur lors de l\'association du profil')
+    // Associer l'entreprise au profil via API
+    const profileResponse = await fetch('/api/update-profile', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        userId,
+        organization_id: company.id, // ← Corrigé ici
+      }),
+    })
+
+    if (!profileResponse.ok) {
+      const profileResult = await profileResponse.json()
+      setError(profileResult.error || 'Erreur lors de l\'association du profil')
       setLoading(false)
       return
     }
 
     // Créer un abonnement gratuit par défaut
-    await supabase.from('subscriptions').insert({
-      company_id: company.id,
-      plan: 'free',
-      status: 'active',
+    await fetch('/api/create-subscription', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        organization_id: company.id, // ← Corrigé ici aussi
+        plan: 'free',
+        status: 'active',
+      }),
     })
 
     router.push('/dashboard')

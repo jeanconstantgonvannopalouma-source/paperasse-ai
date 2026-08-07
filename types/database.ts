@@ -1,26 +1,39 @@
-export type Company = {
+// ======================================================
+// Types mis à jour pour utiliser "organizations" au lieu de "companies"
+// ======================================================
+
+export type Organization = {
   id: string
   name: string
   legal_form: string | null
   industry: string | null
   siret: string | null
-  vat_regime: 'standard' | 'franchise'
+  siren: string | null
+  vat_number: string | null
+  vat_regime: 'standard' | 'franchise' | null
   accountant_email: string | null
+  address: string | null
+  city: string | null
+  postal_code: string | null
+  country: string | null
+  created_by: string | null
   created_at: string
+  updated_at: string | null
 }
 
 export type Profile = {
   id: string
-  company_id: string | null
+  organization_id: string | null          // ← Corrigé
   email: string
   full_name: string | null
   role: 'owner' | 'admin' | 'member'
   created_at: string
+  updated_at: string | null
 }
 
 export type Document = {
   id: string
-  company_id: string
+  organization_id: string                 // ← Corrigé
   user_id: string | null
   file_url: string
   file_name: string
@@ -55,7 +68,7 @@ export type ExtractedData = {
 
 export type Transaction = {
   id: string
-  company_id: string
+  organization_id: string                 // ← Corrigé
   document_id: string | null
   transaction_type: 'expense' | 'income' | 'receipt' | 'other'
   third_party_name: string | null
@@ -72,7 +85,7 @@ export type Transaction = {
 
 export type Subscription = {
   id: string
-  company_id: string
+  organization_id: string                 // ← Corrigé
   stripe_customer_id: string | null
   stripe_subscription_id: string | null
   plan: 'free' | 'starter' | 'pro' | 'business'
@@ -80,3 +93,6 @@ export type Subscription = {
   current_period_end: string | null
   created_at: string
 }
+
+// Type alias pour la rétrocompatibilité (optionnel)
+export type Company = Organization

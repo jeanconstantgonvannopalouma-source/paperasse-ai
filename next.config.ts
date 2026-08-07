@@ -1,15 +1,8 @@
 import type { NextConfig } from 'next'
 
 const nextConfig: NextConfig = {
-  // Configuration Turbopack (vide mais nécessaire)
+  // Configuration Turbopack
   turbopack: {},
-  
-  // Configuration expérimentale (optionnelle mais propre)
-  experimental: {
-    serverActions: {
-      bodySizeLimit: '2mb',
-    },
-  },
 }
 
 export default nextConfig

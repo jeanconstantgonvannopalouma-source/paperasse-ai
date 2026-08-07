@@ -1,11 +1,10 @@
 'use client'
 
 import Link from 'next/link'
-import { usePathname } from 'next/navigation'
+import { usePathname, useRouter } from 'next/navigation'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { createClient } from '@/lib/supabase/client'
-import { useRouter } from 'next/navigation'
 import { useAuth } from '@/hooks/use-auth'
-import { useState, useCallback, useEffect, useRef } from 'react'
 
 // ─── Types ───────────────────────────────────────────────────
 interface MenuItem {
@@ -16,7 +15,7 @@ interface MenuItem {
   section: 'main' | 'secondary'
 }
 
-// ─── Icônes SVG (pas besoin de librairie externe) ────────────
+// ─── Icônes SVG ──────────────────────────────────────────────
 function DashboardIcon({ className }: { className?: string }) {
   return (
     <svg className={className} xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
@@ -36,6 +35,16 @@ function DocumentIcon({ className }: { className?: string }) {
       <path d="M10 9H8" />
       <path d="M16 13H8" />
       <path d="M16 17H8" />
+    </svg>
+  )
+}
+
+function ChantierIcon({ className }: { className?: string }) {
+  return (
+    <svg className={className} xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+      <path d="M2 18a1 1 0 0 0 1 1h18a1 1 0 0 0 1-1v-2a1 1 0 0 0-1-1H3a1 1 0 0 0-1 1v2z" />
+      <path d="M10 10V5a1 1 0 0 1 1-1h2a1 1 0 0 1 1 1v5" />
+      <path d="M4 15v-3a8 8 0 0 1 16 0v3" />
     </svg>
   )
 }
@@ -99,11 +108,42 @@ function CloseIcon({ className }: { className?: string }) {
 
 // ─── Menu Items ──────────────────────────────────────────────
 const menuItems: MenuItem[] = [
-  { label: 'Tableau de bord', href: '/dashboard', icon: <DashboardIcon />, section: 'main' },
-  { label: 'Documents', href: '/documents', icon: <DocumentIcon />, section: 'main' },
-  { label: 'Transactions', href: '/transactions', icon: <TransactionIcon />, section: 'main' },
-  { label: 'Exports', href: '/exports', icon: <ExportIcon />, section: 'main' },
-  { label: 'Paramètres', href: '/settings', icon: <SettingsIcon />, section: 'secondary' },
+  {
+    label: 'Tableau de bord',
+    href: '/dashboard',
+    icon: <DashboardIcon />,
+    section: 'main',
+  },
+  {
+    label: 'Documents',
+    href: '/documents',
+    icon: <DocumentIcon />,
+    section: 'main',
+  },
+  {
+    label: 'Chantiers',
+    href: '/chantiers',
+    icon: <ChantierIcon />,
+    section: 'main',
+  },
+  {
+    label: 'Transactions',
+    href: '/transactions',
+    icon: <TransactionIcon />,
+    section: 'main',
+  },
+  {
+    label: 'Exports',
+    href: '/exports',
+    icon: <ExportIcon />,
+    section: 'main',
+  },
+  {
+    label: 'Paramètres',
+    href: '/settings',
+    icon: <SettingsIcon />,
+    section: 'secondary',
+  },
 ]
 
 // ─── Composant Sidebar ───────────────────────────────────────
@@ -112,26 +152,29 @@ export function Sidebar() {
   const router = useRouter()
   const supabase = createClient()
   const { user } = useAuth()
+
   const [isLoggingOut, setIsLoggingOut] = useState(false)
   const [isMobileOpen, setIsMobileOpen] = useState(false)
   const sidebarRef = useRef<HTMLDivElement>(null)
 
-  // Fermer la sidebar mobile quand on clique sur un lien
+  // Fermer la sidebar mobile au changement de page
   useEffect(() => {
     setIsMobileOpen(false)
   }, [pathname])
 
-  // Fermer la sidebar mobile quand on clique en dehors
+  // Fermer en cliquant en dehors
   useEffect(() => {
     function handleClickOutside(event: MouseEvent) {
-      if (sidebarRef.current && !sidebarRef.current.contains(event.target as Node)) {
+      if (
+        sidebarRef.current &&
+        !sidebarRef.current.contains(event.target as Node)
+      ) {
         setIsMobileOpen(false)
       }
     }
 
     if (isMobileOpen) {
       document.addEventListener('mousedown', handleClickOutside)
-      // Empêcher le scroll du body quand la sidebar est ouverte
       document.body.style.overflow = 'hidden'
     }
 
@@ -148,16 +191,20 @@ export function Sidebar() {
         setIsMobileOpen(false)
       }
     }
+
     document.addEventListener('keydown', handleEscape)
     return () => document.removeEventListener('keydown', handleEscape)
   }, [])
 
   const handleLogout = useCallback(async () => {
     if (isLoggingOut) return
+
     setIsLoggingOut(true)
+
     try {
       const { error } = await supabase.auth.signOut()
       if (error) throw error
+
       router.push('/login')
       router.refresh()
     } catch (error) {
@@ -166,25 +213,28 @@ export function Sidebar() {
     }
   }, [isLoggingOut, supabase, router])
 
-  // Extraire les initiales de l'email
   function getInitials(email: string | undefined): string {
     if (!email) return '??'
-    const parts = email.split('@')[0]
-    return parts.substring(0, 2).toUpperCase()
+    return email.split('@')[0].substring(0, 2).toUpperCase()
   }
 
-  // Vérifier si un lien est actif
   function isActive(href: string): boolean {
     if (href === '/dashboard') {
       return pathname === '/dashboard'
     }
-    return pathname.startsWith(href)
+    return pathname === href || pathname.startsWith(`${href}/`)
   }
 
-  const mainItems = menuItems.filter((item) => item.section === 'main')
-  const secondaryItems = menuItems.filter((item) => item.section === 'secondary')
+  const mainItems = useMemo(
+    () => menuItems.filter((item) => item.section === 'main'),
+    []
+  )
 
-  // ─── Contenu de la sidebar (réutilisé desktop + mobile) ────
+  const secondaryItems = useMemo(
+    () => menuItems.filter((item) => item.section === 'secondary'),
+    []
+  )
+
   const sidebarContent = (
     <>
       {/* Logo */}
@@ -202,8 +252,11 @@ export function Sidebar() {
         </div>
       </div>
 
-      {/* Navigation principale */}
-      <nav className="flex-1 p-3 space-y-6 overflow-y-auto" aria-label="Navigation principale">
+      {/* Navigation */}
+      <nav
+        className="flex-1 p-3 space-y-6 overflow-y-auto"
+        aria-label="Navigation principale"
+      >
         {/* Section principale */}
         <div>
           <p className="px-3 mb-2 text-[11px] font-semibold uppercase tracking-wider text-gray-500">
@@ -212,6 +265,7 @@ export function Sidebar() {
           <div className="space-y-1">
             {mainItems.map((item) => {
               const active = isActive(item.href)
+
               return (
                 <Link
                   key={item.href}
@@ -220,21 +274,35 @@ export function Sidebar() {
                   className={`
                     group flex items-center gap-3 px-3 py-2.5 rounded-lg text-sm font-medium
                     transition-all duration-200
-                    ${active
-                      ? 'bg-blue-600 text-white shadow-lg shadow-blue-600/20'
-                      : 'text-gray-400 hover:bg-gray-800/60 hover:text-white'
+                    ${
+                      active
+                        ? 'bg-blue-600 text-white shadow-lg shadow-blue-600/20'
+                        : 'text-gray-400 hover:bg-gray-800/60 hover:text-white'
                     }
                   `}
                 >
-                  <span className={`transition-colors ${active ? 'text-white' : 'text-gray-500 group-hover:text-white'}`}>
+                  <span
+                    className={`transition-colors ${
+                      active
+                        ? 'text-white'
+                        : 'text-gray-500 group-hover:text-white'
+                    }`}
+                  >
                     {item.icon}
                   </span>
                   <span>{item.label}</span>
-                  {item.badge !== undefined && item.badge > 0 && (
-                    <span className={`
-                      ml-auto text-xs font-semibold px-2 py-0.5 rounded-full
-                      ${active ? 'bg-white/20 text-white' : 'bg-blue-600/20 text-blue-400'}
-                    `}>
+
+                  {typeof item.badge === 'number' && item.badge > 0 && (
+                    <span
+                      className={`
+                        ml-auto text-xs font-semibold px-2 py-0.5 rounded-full
+                        ${
+                          active
+                            ? 'bg-white/20 text-white'
+                            : 'bg-blue-600/20 text-blue-400'
+                        }
+                      `}
+                    >
                       {item.badge}
                     </span>
                   )}
@@ -252,6 +320,7 @@ export function Sidebar() {
           <div className="space-y-1">
             {secondaryItems.map((item) => {
               const active = isActive(item.href)
+
               return (
                 <Link
                   key={item.href}
@@ -260,13 +329,20 @@ export function Sidebar() {
                   className={`
                     group flex items-center gap-3 px-3 py-2.5 rounded-lg text-sm font-medium
                     transition-all duration-200
-                    ${active
-                      ? 'bg-blue-600 text-white shadow-lg shadow-blue-600/20'
-                      : 'text-gray-400 hover:bg-gray-800/60 hover:text-white'
+                    ${
+                      active
+                        ? 'bg-blue-600 text-white shadow-lg shadow-blue-600/20'
+                        : 'text-gray-400 hover:bg-gray-800/60 hover:text-white'
                     }
                   `}
                 >
-                  <span className={`transition-colors ${active ? 'text-white' : 'text-gray-500 group-hover:text-white'}`}>
+                  <span
+                    className={`transition-colors ${
+                      active
+                        ? 'text-white'
+                        : 'text-gray-500 group-hover:text-white'
+                    }`}
+                  >
                     {item.icon}
                   </span>
                   <span>{item.label}</span>
@@ -277,9 +353,8 @@ export function Sidebar() {
         </div>
       </nav>
 
-      {/* Profil utilisateur + Déconnexion */}
+      {/* Profil + déconnexion */}
       <div className="p-3 border-t border-gray-800">
-        {/* Carte utilisateur */}
         <div className="flex items-center gap-3 px-3 py-3 mb-2 rounded-lg bg-gray-800/50">
           <div className="w-8 h-8 bg-blue-600 rounded-full flex items-center justify-center text-xs font-bold text-white flex-shrink-0">
             {getInitials(user?.email)}
@@ -294,16 +369,16 @@ export function Sidebar() {
           </div>
         </div>
 
-        {/* Bouton déconnexion */}
         <button
           onClick={handleLogout}
           disabled={isLoggingOut}
           className={`
             w-full flex items-center gap-3 px-3 py-2.5 rounded-lg text-sm font-medium
             transition-all duration-200
-            ${isLoggingOut
-              ? 'text-gray-600 cursor-not-allowed'
-              : 'text-gray-400 hover:bg-red-500/10 hover:text-red-400'
+            ${
+              isLoggingOut
+                ? 'text-gray-600 cursor-not-allowed'
+                : 'text-gray-400 hover:bg-red-500/10 hover:text-red-400'
             }
           `}
         >
@@ -327,7 +402,11 @@ export function Sidebar() {
 
       {/* Overlay mobile */}
       {isMobileOpen && (
-        <div className="fixed inset-0 bg-black/60 z-40 lg:hidden" aria-hidden="true" />
+        <div
+          className="fixed inset-0 bg-black/60 z-40 lg:hidden"
+          aria-hidden="true"
+          onClick={() => setIsMobileOpen(false)}
+        />
       )}
 
       {/* Sidebar mobile */}
@@ -340,7 +419,6 @@ export function Sidebar() {
           ${isMobileOpen ? 'translate-x-0' : '-translate-x-full'}
         `}
       >
-        {/* Bouton fermer */}
         <button
           onClick={() => setIsMobileOpen(false)}
           className="absolute top-4 right-4 p-1 text-gray-400 hover:text-white"
@@ -352,7 +430,7 @@ export function Sidebar() {
       </div>
 
       {/* Sidebar desktop */}
-      <aside className="hidden lg:flex w-64 bg-gray-900 flex-col flex-shrink-0">
+      <aside className="hidden lg:flex w-64 bg-gray-900 flex-col flex-shrink-0 min-h-screen">
         {sidebarContent}
       </aside>
     </>

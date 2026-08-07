@@ -39,11 +39,11 @@ export default function LoginPage() {
       // Vérifier si l'utilisateur a une entreprise
       const { data: profile } = await supabase
         .from('profiles')
-        .select('company_id')
+        .select('organization_id')           // ← Corrigé
         .eq('id', data.user.id)
         .single()
 
-      if (profile?.company_id) {
+      if (profile?.organization_id) {       // ← Corrigé
         router.push('/dashboard')
       } else {
         router.push('/onboarding')
