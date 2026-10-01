@@ -14,7 +14,6 @@ export async function POST(request: NextRequest) {
 
     const stripe = new Stripe(stripeKey, { apiVersion: '2023-10-16' as any })
 
-    // 1. Authentification
     const responseHeaders = new Headers()
     const supabaseAuth = createServerClient(
       process.env.NEXT_PUBLIC_SUPABASE_URL!,
@@ -78,12 +77,15 @@ export async function POST(request: NextRequest) {
       })
       customerId = customer.id
 
-      // Enregistrer le customer ID en BDD
-      await supabaseAdmin
-        .from('organizations')
-        .update({ stripe_customer_id: customerId })
-        .eq('id', orgId)
-        .catch(() => {})
+      // Sauvegarde sécurisée sans .catch()
+      try {
+        await supabaseAdmin
+          .from('organizations')
+          .update({ stripe_customer_id: customerId })
+          .eq('id', orgId)
+      } catch (e) {
+        console.warn('[STRIPE] Erreur sauvegarde customer_id BDD:', e)
+      }
     }
 
     const baseUrl = process.env.NEXT_PUBLIC_APP_URL || (typeof window !== 'undefined' ? window.location.origin : 'http://localhost:3000')
@@ -92,7 +94,7 @@ export async function POST(request: NextRequest) {
     const interval = body.interval === 'year' ? 'year' : 'month'
     const unitAmount = interval === 'year' ? 39000 : 3900 // 390€/an ou 39€/mois
 
-    // 3. Créer la session Stripe Checkout
+    // 3. Session Stripe Checkout
     const session = await stripe.checkout.sessions.create({
       customer: customerId,
       payment_method_types: ['card'],
