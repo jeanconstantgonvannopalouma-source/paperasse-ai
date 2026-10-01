@@ -2,137 +2,106 @@
 import { createServerClient } from '@supabase/ssr'
 import { createClient as createServiceClient } from '@supabase/supabase-js'
 
-async function getServiceClient(request: NextRequest) {
-  const supabaseAuth = createServerClient(
-    process.env.NEXT_PUBLIC_SUPABASE_URL!,
-    process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!,
-    { cookies: { getAll() { return request.cookies.getAll() }, setAll() {} } }
-  )
-
-  const { data: { user }, error: authError } = await supabaseAuth.auth.getUser()
-  if (authError || !user) return { error: NextResponse.json({ error: 'Non authentifié' }, { status: 401 }) }
-
-  if (!process.env.SUPABASE_SERVICE_ROLE_KEY) {
-    return { error: NextResponse.json({ error: 'Clé serveur manquante' }, { status: 500 }) }
-  }
-
-  const supabase = createServiceClient(
-    process.env.NEXT_PUBLIC_SUPABASE_URL!,
-    process.env.SUPABASE_SERVICE_ROLE_KEY!
-  )
-
-  return { user, supabase }
-}
-
-async function resolveOrgId(supabase: any, userId: string) {
-  const { data: profile } = await supabase.from('profiles').select('organization_id').eq('id', userId).maybeSingle()
-  let orgId = profile?.organization_id || null
-  if (!orgId) {
-    const { data: anyOrg } = await supabase.from('organizations').select('id').limit(1).maybeSingle()
-    if (anyOrg?.id) {
-      orgId = anyOrg.id
-      await supabase.from('profiles').upsert({ id: userId, organization_id: orgId })
-    }
-  }
-  return orgId
-}
-
 export async function GET(request: NextRequest) {
   try {
-    const ctx = await getServiceClient(request)
-    if ('error' in ctx && ctx.error) return ctx.error
-    const { user, supabase } = ctx as any
-    const orgId = await resolveOrgId(supabase, user.id)
+    const supabaseAuth = createServerClient(
+      process.env.NEXT_PUBLIC_SUPABASE_URL!,
+      process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!,
+      { cookies: { getAll() { return request.cookies.getAll() }, setAll() {} } }
+    )
 
-    let query = supabase.from('transactions').select('*, chantiers(id, name)').order('created_at', { ascending: false })
-    if (orgId) query = query.eq('organization_id', orgId)
+    const { data: { user } } = await supabaseAuth.auth.getUser()
+    if (!user) return NextResponse.json({ error: 'Non authentifié' }, { status: 401 })
 
-    const { data, error } = await query
-    if (error) throw error
+    const serviceKey = process.env.SUPABASE_SERVICE_ROLE_KEY || process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY
+    const supabaseAdmin = createServiceClient(process.env.NEXT_PUBLIC_SUPABASE_URL!, serviceKey!)
 
-    return NextResponse.json({ success: true, transactions: data || [] })
+    const { data: profile } = await supabaseAdmin.from('profiles').select('organization_id').eq('id', user.id).maybeSingle()
+    let orgId = profile?.organization_id
+
+    if (!orgId) {
+      const { data: anyOrg } = await supabaseAdmin.from('organizations').select('id').limit(1).maybeSingle()
+      orgId = anyOrg?.id
+    }
+
+    // 1. Récupérer UNIQUEMENT les transactions (Pas de jointure risquée)
+    let txQuery = supabaseAdmin.from('transactions').select('*').order('created_at', { ascending: false })
+    if (orgId) txQuery = txQuery.eq('organization_id', orgId)
+    
+    const { data: rawTransactions, error: txError } = await txQuery
+    if (txError) throw txError
+
+    const transactions = rawTransactions || []
+
+    // 2. Récupérer les chantiers séparément
+    let chQuery = supabaseAdmin.from('chantiers').select('id, name')
+    if (orgId) chQuery = chQuery.eq('organization_id', orgId)
+    const { data: chantiers } = await chQuery
+
+    const chMap = new Map((chantiers || []).map(c => [c.id, c.name]))
+
+    // 3. Fusion manuelle 100% sécurisée
+    const finalTransactions = transactions.map(t => ({
+      ...t,
+      chantiers: t.chantier_id && chMap.has(t.chantier_id) 
+        ? { id: t.chantier_id, name: chMap.get(t.chantier_id) } 
+        : null
+    }))
+
+    return NextResponse.json({ success: true, transactions: finalTransactions })
   } catch (e: any) {
-    return NextResponse.json({ error: e.message || 'Erreur GET' }, { status: 500 })
+    console.error('[API TRANSACTIONS GET ERR]', e)
+    return NextResponse.json({ error: e.message || 'Erreur Serveur' }, { status: 500 })
   }
 }
 
 export async function PATCH(request: NextRequest) {
   try {
-    const ctx = await getServiceClient(request)
-    if ('error' in ctx && ctx.error) return ctx.error
-    const { user, supabase } = ctx as any
+    const serviceKey = process.env.SUPABASE_SERVICE_ROLE_KEY || process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY
+    const supabaseAdmin = createServiceClient(process.env.NEXT_PUBLIC_SUPABASE_URL!, serviceKey!)
+    
     const body = await request.json()
     const { id, chantier_id } = body
     if (!id) return NextResponse.json({ error: 'id requis' }, { status: 400 })
 
-    const orgId = await resolveOrgId(supabase, user.id)
-
-    // 🛡️ SÉCURITÉ : Empêcher de modifier une Facture Client émise (Loi Anti-Fraude TVA)
-    const { data: existingTx } = await supabase.from('transactions').select('transaction_type, invoice_number').eq('id', id).single()
-    if (existingTx?.transaction_type === 'income' && existingTx?.invoice_number?.startsWith('FACT')) {
-      return NextResponse.json({ error: 'Légalement, une facture émise ne peut être modifiée. Faites un avoir.' }, { status: 403 })
-    }
-
     const payload = { chantier_id: chantier_id && chantier_id !== 'none' ? chantier_id : null }
-    let q = supabase.from('transactions').update(payload).eq('id', id)
-    if (orgId) q = q.eq('organization_id', orgId)
     
-    const { data: tx, error } = await q.select('*, chantiers(id, name)').single()
+    const { data, error } = await supabaseAdmin.from('transactions').update(payload).eq('id', id).select().single()
     if (error) throw error
 
-    // Sync avec le document si existant
-    if (tx?.document_id) {
-      await supabase.from('documents').update({ chantier_id: payload.chantier_id }).eq('id', tx.document_id)
+    if (data?.document_id) {
+      await supabaseAdmin.from('documents').update({ chantier_id: payload.chantier_id }).eq('id', data.document_id)
     }
 
-    return NextResponse.json({ success: true, transaction: tx })
+    return NextResponse.json({ success: true, transaction: data })
   } catch (e: any) {
-    return NextResponse.json({ error: e.message || 'Erreur PATCH' }, { status: 500 })
+    return NextResponse.json({ error: e.message || 'Erreur' }, { status: 500 })
   }
 }
 
 export async function DELETE(request: NextRequest) {
   try {
-    const ctx = await getServiceClient(request)
-    if ('error' in ctx && ctx.error) return ctx.error
-    const { user, supabase } = ctx as any
+    const serviceKey = process.env.SUPABASE_SERVICE_ROLE_KEY || process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY
+    const supabaseAdmin = createServiceClient(process.env.NEXT_PUBLIC_SUPABASE_URL!, serviceKey!)
 
     const body = await request.json().catch(() => ({}))
     const id = body.id as string
     if (!id) return NextResponse.json({ error: 'id requis' }, { status: 400 })
 
-    const orgId = await resolveOrgId(supabase, user.id)
-
-    // 1. Récupérer les infos de la transaction avant suppression
-    let q = supabase.from('transactions').select('*').eq('id', id)
-    if (orgId) q = q.eq('organization_id', orgId)
-    const { data: txToDelete } = await q.single()
-
+    const { data: txToDelete } = await supabaseAdmin.from('transactions').select('*').eq('id', id).single()
     if (!txToDelete) return NextResponse.json({ error: 'Transaction introuvable' }, { status: 404 })
 
-    // 🛡️ SÉCURITÉ LÉGALE : Interdiction de supprimer une facture client !
-    if (txToDelete.transaction_type === 'income' && txToDelete.invoice_number?.startsWith('FACT')) {
-      return NextResponse.json({ error: 'Interdit : Une facture client officielle ne peut pas être supprimée de la comptabilité.' }, { status: 403 })
-    }
-
-    // 2. Suppression de la transaction
-    const { error } = await supabase.from('transactions').delete().eq('id', id)
+    const { error } = await supabaseAdmin.from('transactions').delete().eq('id', id)
     if (error) throw error
 
-    // 3. COHÉRENCE 1 : Remettre le document en "À vérifier"
     if (txToDelete.document_id) {
-      await supabase.from('documents')
-        .update({ status: 'analyzed' })
-        .eq('id', txToDelete.document_id)
+      await supabaseAdmin.from('documents').update({ status: 'analyzed' }).eq('id', txToDelete.document_id)
     }
 
-    // 4. COHÉRENCE 2 : Délier la banque (remettre en non-rapproché)
-    await supabase.from('bank_transactions')
-      .update({ status: 'unmatched', matched_transaction_id: null, matched_document_id: null })
-      .eq('matched_transaction_id', id)
+    await supabaseAdmin.from('bank_transactions').update({ status: 'unmatched', matched_transaction_id: null, matched_document_id: null }).eq('matched_transaction_id', id)
 
     return NextResponse.json({ success: true })
   } catch (e: any) {
-    return NextResponse.json({ error: e.message || 'Erreur DELETE' }, { status: 500 })
+    return NextResponse.json({ error: e.message || 'Erreur' }, { status: 500 })
   }
 }
