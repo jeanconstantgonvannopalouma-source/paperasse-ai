@@ -15,7 +15,6 @@ export async function POST(request: NextRequest) {
 
     docIdToUpdate = documentId
 
-    // Client Authentifié pour vérifier l'accès multi-tenant
     const supabaseAuth = createServerClient(
       process.env.NEXT_PUBLIC_SUPABASE_URL!,
       process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!,
@@ -32,13 +31,16 @@ export async function POST(request: NextRequest) {
       return NextResponse.json({ error: 'Non authentifié' }, { status: 401 })
     }
 
-    // Client Admin pour effectuer l'analyse et la mise à jour
+    const serviceKey = process.env.SUPABASE_SERVICE_ROLE_KEY
+    if (!serviceKey) {
+      return NextResponse.json({ error: 'Clé de service introuvable' }, { status: 500 })
+    }
+
     const supabaseAdmin = createServiceClient(
       process.env.NEXT_PUBLIC_SUPABASE_URL!,
-      process.env.SUPABASE_SERVICE_ROLE_KEY!
+      serviceKey
     )
 
-    // 1. Récupérer le document ET vérifier l'organisation
     const { data: profile } = await supabaseAdmin
       .from('profiles')
       .select('organization_id')
@@ -53,19 +55,17 @@ export async function POST(request: NextRequest) {
       .single()
 
     if (docError || !document) {
-      console.error("[ANALYZE] Document introuvable ou accès refusé:", docError)
+      console.error('[ANALYZE] Document introuvable ou accès refusé:', docError)
       return NextResponse.json({ error: 'Document introuvable ou accès non autorisé' }, { status: 404 })
     }
 
     console.log(`[ANALYZE] Début analyse IA pour doc ${documentId}`)
 
-    // Passer en statut 'analyzing'
     await supabaseAdmin
       .from('documents')
       .update({ status: 'analyzing' })
       .eq('id', documentId)
 
-    // 2. Récupérer le fichier binaire depuis Supabase Storage
     let fileBuffer: Buffer | null = null
     let mimeType = document.file_type || 'image/jpeg'
     const fileUrl: string = document.file_url || ''
@@ -85,11 +85,10 @@ export async function POST(request: NextRequest) {
           if (blob.type) mimeType = blob.type
         }
       } catch (e) {
-        console.warn(`[ANALYZE] Warning Storage SDK:`, e)
+        console.warn('[ANALYZE] Warning Storage SDK:', e)
       }
     }
 
-    // Fallback HTTP Fetch
     if (!fileBuffer) {
       let absoluteUrl = fileUrl
       if (fileUrl.startsWith('/')) {
@@ -104,13 +103,11 @@ export async function POST(request: NextRequest) {
     }
 
     if (!fileBuffer) {
-      throw new Error("Impossible de charger le fichier binaire")
+      throw new Error('Impossible de charger le fichier binaire')
     }
 
-    // 3. Extraction par l'IA
     const extractedData = await extractDocumentFromBuffer(fileBuffer, mimeType, document.file_name)
 
-    // 4. Succès : Mise à jour en BDD
     const { error: updateError } = await supabaseAdmin
       .from('documents')
       .update({
@@ -130,21 +127,24 @@ export async function POST(request: NextRequest) {
     const errorMsg = error instanceof Error ? error.message : 'Erreur d\'analyse IA'
     console.error(`[ANALYZE] Erreur sur doc ${docIdToUpdate}:`, errorMsg)
 
-    // 🛡️ SÉCURITÉ RESILIENCE : Si l'IA plante, on marque le document en statut 'error' en BDD !
+    // 🛡️ SÉCURITÉ : Sauvegarde sans .catch() invalide
     if (docIdToUpdate) {
-      const supabaseAdmin = createServiceClient(
-        process.env.NEXT_PUBLIC_SUPABASE_URL!,
-        process.env.SUPABASE_SERVICE_ROLE_KEY!
-      )
+      try {
+        const supabaseAdmin = createServiceClient(
+          process.env.NEXT_PUBLIC_SUPABASE_URL!,
+          process.env.SUPABASE_SERVICE_ROLE_KEY!
+        )
 
-      await supabaseAdmin
-        .from('documents')
-        .update({
-          status: 'error',
-          extracted_data: { error: errorMsg },
-        })
-        .eq('id', docIdToUpdate)
-        .catch(() => {})
+        await supabaseAdmin
+          .from('documents')
+          .update({
+            status: 'error',
+            extracted_data: { error: errorMsg },
+          })
+          .eq('id', docIdToUpdate)
+      } catch (e) {
+        console.warn('[ANALYZE] Erreur mise à jour statut error:', e)
+      }
     }
 
     return NextResponse.json({ error: errorMsg }, { status: 500 })
