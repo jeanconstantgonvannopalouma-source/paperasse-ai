@@ -1,6 +1,6 @@
 /**
  * Security Headers Middleware
- * Ajoute des en-têtes de sécurité HTTP critiques pour protéger l'application
+ * Ajoute des en-têtes de securite HTTP critiques pour proteger l'application
  */
 import { NextResponse } from 'next/server'
 import type { NextRequest } from 'next/server'
@@ -19,45 +19,39 @@ const CSP_POLICY = [
 ].join('; ')
 
 const SECURITY_HEADERS = {
-  // 🛡️ Content Security Policy
-  'Content-Security-Policy': CSP_POLICY,
+  //  Content Security Policy ? 'Content-Security-Policy' : CSP_POLICY,
 
-  // 🛡️ Protection contre clickjacking
-  'X-Frame-Options': 'DENY',
+  //  Protection contre clickjacking ? 'X-Frame-Options' : 'DENY',
 
-  // 🛡️ Protection MIME sniffing
-  'X-Content-Type-Options': 'nosniff',
+  //  Protection MIME sniffing ? 'X-Content-Type-Options' : 'nosniff',
 
-  // 🛡️ Protection XSS (legacy mais utile)
+  //  Protection XSS (legacy mais utile)
   'X-XSS-Protection': '1; mode=block',
 
-  // 🛡️ Referrer policy
-  'Referrer-Policy': 'strict-origin-when-cross-origin',
+  //  Referrer policy ? 'Referrer-Policy' : 'strict-origin-when-cross-origin',
 
-  // 🛡️ Permissions Policy (anciennement Feature-Policy)
+  //  Permissions Policy (anciennement Feature-Policy)
   'Permissions-Policy': 'camera=(), microphone=(), geolocation=(), payment=()',
 
-  // 🛡️ HSTS (HTTP Strict Transport Security) - 1 an
-  'Strict-Transport-Security': 'max-age=31536000; includeSubDomains; preload',
+  //  HSTS (HTTP Strict Transport Security) - 1 an ? 'Strict-Transport-Security' : 'max-age=31536000; includeSubDomains; preload',
 
-  // 🛡️ Cross-Origin policies
-  'Cross-Origin-Opener-Policy': 'same-origin',
+  //  Cross-Origin policies ? 'Cross-Origin-Opener-Policy' : 'same-origin',
   'Cross-Origin-Resource-Policy': 'same-origin',
   'Cross-Origin-Embedder-Policy': 'require-corp',
 }
 
 /**
- * Middleware principal combinant sécurité + authentification
+ * Middleware principal combinant securite + authentification
  */
 export async function securityMiddleware(request: NextRequest) {
   const response = NextResponse.next()
 
-  // 🔒 Appliquer tous les headers de sécurité
+  //  Appliquer tous les headers de securite
   Object.entries(SECURITY_HEADERS).forEach(([key, value]) => {
     response.headers.set(key, value)
   })
 
-  // 🔒 Header personnalisé pour debugging
+  //  Header personnalise pour debugging
   response.headers.set('X-Paperasse-AI', 'secure')
 
   return response

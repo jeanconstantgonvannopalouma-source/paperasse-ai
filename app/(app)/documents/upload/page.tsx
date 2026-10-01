@@ -1,486 +1,436 @@
-'use client'
+﻿'use client'
 
-import { useState, useCallback, useRef } from 'react'
+import { useState, useCallback, useEffect, useRef } from 'react'
 import { useRouter } from 'next/navigation'
 import Link from 'next/link'
 import { createClient } from '@/lib/supabase/client'
-import { useAuth } from '@/hooks/use-auth'
 import { Button } from '@/components/ui/button'
+import { Label } from '@/components/ui/label'
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from '@/components/ui/select'
 import {
   Upload,
   FileText,
   X,
-  Loader2,
   CheckCircle2,
   AlertCircle,
+  Loader2,
   ArrowLeft,
+  HardHat,
   Image as ImageIcon,
+  Camera,
+  RefreshCw,
 } from 'lucide-react'
 
-// ─── Types ───────────────────────────────────────────────────
-type UploadStatus = 'idle' | 'uploading' | 'success' | 'error'
-
-interface FileUpload {
+interface ChantierOption {
   id: string
-  file: File
-  status: UploadStatus
-  progress: number
-  error?: string
-  documentId?: string
+  name: string
 }
 
-// ─── Helpers ─────────────────────────────────────────────────
-const ACCEPTED_TYPES = [
-  'application/pdf',
-  'image/jpeg',
-  'image/jpg',
-  'image/png',
-  'image/webp',
-  'image/heic',
-]
-
-const MAX_FILE_SIZE = 10 * 1024 * 1024 // 10 MB
-
-function formatFileSize(bytes: number): string {
-  if (bytes < 1024) return `${bytes} o`
-  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} Ko`
-  return `${(bytes / (1024 * 1024)).toFixed(1)} Mo`
-}
-
-function getFileIcon(type: string) {
-  if (type.startsWith('image/')) return <ImageIcon className="h-5 w-5" />
-  return <FileText className="h-5 w-5" />
-}
-
-// ─── Page Upload ─────────────────────────────────────────────
-export default function UploadDocumentPage() {
+export default function UploadPage() {
   const router = useRouter()
-  const { user } = useAuth()
   const supabase = createClient()
-  const inputRef = useRef<HTMLInputElement>(null)
 
-  const [files, setFiles] = useState<FileUpload[]>([])
-  const [isDragging, setIsDragging] = useState(false)
-  const [globalError, setGlobalError] = useState<string | null>(null)
-  const [isUploading, setIsUploading] = useState(false)
+  const [files, setFiles] = useState<File[]>([])
+  const [chantiers, setChantiers] = useState<ChantierOption[]>([])
+  const [selectedChantier, setSelectedChantier] = useState<string>('none')
+  const [uploading, setUploading] = useState(false)
+  const [error, setError] = useState<string | null>(null)
+  const [successMsg, setSuccessMsg] = useState<string | null>(null)
 
-  // ─── Validation d'un fichier ───────────────────────────────
-  function validateFile(file: File): string | null {
-    if (!ACCEPTED_TYPES.includes(file.type) && !file.name.match(/\.(pdf|jpe?g|png|webp|heic)$/i)) {
-      return 'Format non supporté. Utilisez PDF, JPG, PNG ou WEBP.'
+  // WebCam Modal State (Desktop Fallback)
+  const [showWebcam, setShowWebcam] = useState(false)
+  const [webcamError, setWebcamError] = useState<string | null>(null)
+  const [cameraLoading, setCameraLoading] = useState(false)
+  const videoRef = useRef<HTMLVideoElement | null>(null)
+  const [mediaStream, setMediaStream] = useState<MediaStream | null>(null)
+  const nativeCameraInputRef = useRef<HTMLInputElement | null>(null)
+
+  useEffect(() => {
+    async function loadChantiers() {
+      const { data } = await supabase
+        .from('chantiers')
+        .select('id, name')
+        .order('created_at', { ascending: false })
+      if (data) setChantiers(data)
     }
-    if (file.size > MAX_FILE_SIZE) {
-      return `Fichier trop volumineux (max ${formatFileSize(MAX_FILE_SIZE)}).`
-    }
-    return null
-  }
+    loadChantiers()
+  }, [supabase])
 
-  // ─── Ajouter des fichiers à la file ────────────────────────
-  const addFiles = useCallback((newFiles: FileList | File[]) => {
-    const list = Array.from(newFiles)
-    const uploads: FileUpload[] = []
-
-    for (const file of list) {
-      const error = validateFile(file)
-      uploads.push({
-        id: `${Date.now()}-${Math.random().toString(36).slice(2)}`,
-        file,
-        status: error ? 'error' : 'idle',
-        progress: 0,
-        error: error || undefined,
-      })
-    }
-
-    setFiles((prev) => [...prev, ...uploads])
-    setGlobalError(null)
-  }, [])
-
-  // ─── Drag & Drop ───────────────────────────────────────────
-  function handleDragOver(e: React.DragEvent) {
-    e.preventDefault()
-    setIsDragging(true)
-  }
-
-  function handleDragLeave(e: React.DragEvent) {
-    e.preventDefault()
-    setIsDragging(false)
-  }
-
-  function handleDrop(e: React.DragEvent) {
-    e.preventDefault()
-    setIsDragging(false)
-    if (e.dataTransfer.files?.length) {
-      addFiles(e.dataTransfer.files)
+  // Déclencheur intelligent photo
+  const handleCameraClick = () => {
+    // Si mobile / tablette touch -> On utilise l'appareil photo natif iOS/Android (0 bug de permission)
+    const isMobile = /Android|webOS|iPhone|iPad|iPod|BlackBerry|IEMobile|Opera Mini/i.test(navigator.userAgent)
+    
+    if (isMobile && nativeCameraInputRef.current) {
+      nativeCameraInputRef.current.click()
+    } else {
+      // Sur PC / Mac -> On ouvre le modal webcam
+      startWebcam()
     }
   }
 
-  // ─── Supprimer un fichier de la liste ──────────────────────
-  function removeFile(id: string) {
-    setFiles((prev) => prev.filter((f) => f.id !== id))
-  }
-
-  // ─── Upload d'un seul fichier ──────────────────────────────
-  async function uploadSingleFile(
-    item: FileUpload,
-    organizationId: string,
-    userId: string
-  ): Promise<void> {
-    const { file, id } = item
-
-    // Marquer comme en cours
-    setFiles((prev) =>
-      prev.map((f) =>
-        f.id === id ? { ...f, status: 'uploading', progress: 10 } : f
-      )
-    )
+  // Démarrer la webcam desktop
+  const startWebcam = async () => {
+    setCameraLoading(true)
+    setWebcamError(null)
+    setShowWebcam(true)
 
     try {
-      // 1. Upload vers Supabase Storage
-      const ext = file.name.split('.').pop() || 'pdf'
-      const storagePath = `${organizationId}/${Date.now()}-${Math.random().toString(36).slice(2)}.${ext}`
-
-      setFiles((prev) =>
-        prev.map((f) => (f.id === id ? { ...f, progress: 30 } : f))
-      )
-
-      const { error: storageError } = await supabase.storage
-        .from('documents')
-        .upload(storagePath, file, {
-          cacheControl: '3600',
-          upsert: false,
-          contentType: file.type,
-        })
-
-      if (storageError) throw storageError
-
-      setFiles((prev) =>
-        prev.map((f) => (f.id === id ? { ...f, progress: 60 } : f))
-      )
-
-      // 2. Récupérer l'URL publique (ou signée)
-      const { data: urlData } = supabase.storage
-        .from('documents')
-        .getPublicUrl(storagePath)
-
-      const fileUrl = urlData?.publicUrl || storagePath
-
-      // 3. Créer l'entrée dans la table documents
-      const { data: docData, error: dbError } = await supabase
-        .from('documents')
-        .insert({
-          organization_id: organizationId,
-          user_id: userId,
-          file_url: fileUrl,
-          file_name: file.name,
-          file_type: file.type || null,
-          status: 'uploaded',
-        })
-        .select('id')
-        .single()
-
-      if (dbError) throw dbError
-
-      setFiles((prev) =>
-        prev.map((f) =>
-          f.id === id
-            ? {
-                ...f,
-                status: 'success',
-                progress: 100,
-                documentId: docData.id,
-              }
-            : f
-        )
-      )
-
-      // 4. Déclencher l'analyse IA (optionnel, non bloquant)
+      let stream: MediaStream | null = null
       try {
-        await fetch('/api/documents/analyze', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ documentId: docData.id }),
+        stream = await navigator.mediaDevices.getUserMedia({
+          video: { facingMode: { ideal: 'environment' }, width: { ideal: 1280 }, height: { ideal: 720 } },
         })
       } catch {
-        // L'analyse peut échouer sans bloquer l'upload
-        console.warn('Analyse IA non disponible pour le moment')
+        stream = await navigator.mediaDevices.getUserMedia({ video: true })
+      }
+
+      if (stream) {
+        setMediaStream(stream)
       }
     } catch (err: unknown) {
-      const message =
-        err instanceof Error ? err.message : 'Erreur lors de l\'upload'
-      setFiles((prev) =>
-        prev.map((f) =>
-          f.id === id
-            ? { ...f, status: 'error', progress: 0, error: message }
-            : f
-        )
-      )
+      console.warn('Erreur accès caméra:', err)
+      const e = err as { name?: string }
+      if (e.name === 'NotAllowedError' || e.name === 'PermissionDeniedError') {
+        setWebcamError("L'accès à la caméra a été bloqué par votre navigateur. Autorisez la caméra dans l'URL (cadenas 🔒) ou importez une photo depuis votre galerie.")
+      } else if (e.name === 'NotFoundError' || e.name === 'DevicesNotFoundError') {
+        setWebcamError("Aucune caméra n'a été détectée. Utilisez le bouton 'Choisir dans la galerie'.")
+      } else {
+        setWebcamError("Impossible de démarrer la caméra.")
+      }
+    } finally {
+      setCameraLoading(false)
     }
   }
 
-  // ─── Lancer tous les uploads ───────────────────────────────
-  async function handleUploadAll() {
-    if (!user) return
+  useEffect(() => {
+    if (showWebcam && videoRef.current && mediaStream) {
+      videoRef.current.srcObject = mediaStream
+    }
+  }, [showWebcam, mediaStream])
 
-    const toUpload = files.filter((f) => f.status === 'idle')
-    if (toUpload.length === 0) return
+  const stopWebcam = () => {
+    if (mediaStream) {
+      mediaStream.getTracks().forEach((track) => track.stop())
+      setMediaStream(null)
+    }
+    setShowWebcam(false)
+    setWebcamError(null)
+  }
 
-    setIsUploading(true)
-    setGlobalError(null)
+  const captureSnapshot = () => {
+    if (!videoRef.current) return
+    const video = videoRef.current
+    const canvas = document.createElement('canvas')
+    canvas.width = video.videoWidth || 1280
+    canvas.height = video.videoHeight || 720
+    const ctx = canvas.getContext('2d')
+    if (ctx) {
+      ctx.drawImage(video, 0, 0, canvas.width, canvas.height)
+      canvas.toBlob((blob) => {
+        if (blob) {
+          const snapshotFile = new File([blob], `photo-ticket-${Date.now()}.jpg`, {
+            type: 'image/jpeg',
+          })
+          setFiles((prev) => [...prev, snapshotFile])
+          stopWebcam()
+        }
+      }, 'image/jpeg', 0.9)
+    }
+  }
+
+  const addFiles = (list: FileList | File[]) => {
+    const arr = Array.from(list).filter(
+      (f) => f.type.startsWith('image/') || f.type === 'application/pdf'
+    )
+    if (arr.length === 0) {
+      setError('Formats acceptés : photos (JPG/PNG/WEBP) ou PDF')
+      return
+    }
+    setError(null)
+    setFiles((prev) => [...prev, ...arr])
+  }
+
+  const handleFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+    if (e.target.files?.length) addFiles(e.target.files)
+    e.target.value = ''
+  }
+
+  const handleDrop = useCallback((e: React.DragEvent) => {
+    e.preventDefault()
+    if (e.dataTransfer.files?.length) addFiles(e.dataTransfer.files)
+  }, [])
+
+  const removeFile = (index: number) => {
+    setFiles((prev) => prev.filter((_, i) => i !== index))
+  }
+
+  const handleSubmit = async (e: React.FormEvent) => {
+    e.preventDefault()
+    if (files.length === 0) return
+
+    setUploading(true)
+    setError(null)
+    setSuccessMsg(null)
 
     try {
-      // Récupérer organization_id
-      const { data: profile, error: profileError } = await supabase
-        .from('profiles')
-        .select('organization_id')
-        .eq('id', user.id)
-        .single()
-
-      if (profileError) throw profileError
-
-      if (!profile?.organization_id) {
-        setGlobalError(
-          'Aucune entreprise associée. Complétez d\'abord l\'onboarding.'
-        )
-        setIsUploading(false)
-        return
+      const formData = new FormData()
+      files.forEach((file) => formData.append('files', file))
+      if (selectedChantier !== 'none') {
+        formData.append('chantierId', selectedChantier)
       }
 
-      // Upload séquentiel (plus fiable)
-      for (const item of toUpload) {
-        await uploadSingleFile(item, profile.organization_id, user.id)
-      }
+      const res = await fetch('/api/documents/upload', {
+        method: 'POST',
+        body: formData,
+      })
+
+      const data = await res.json().catch(() => ({}))
+      if (!res.ok) throw new Error(data.error || "Échec de l'envoi")
+
+      setSuccessMsg(data.message || `${files.length} fichier(s) envoyé(s). Analyse IA en cours.`)
+      setFiles([])
+
+      setTimeout(() => {
+        router.push('/documents')
+      }, 1200)
     } catch (err: unknown) {
-      setGlobalError(
-        err instanceof Error ? err.message : 'Erreur lors de l\'upload'
-      )
+      setError(err instanceof Error ? err.message : 'Erreur lors de l\'upload')
     } finally {
-      setIsUploading(false)
+      setUploading(false)
     }
   }
 
-  const pendingCount = files.filter((f) => f.status === 'idle').length
-  const successCount = files.filter((f) => f.status === 'success').length
-  const allDone =
-    files.length > 0 && files.every((f) => f.status === 'success' || f.status === 'error')
-
-  // ─── Rendu ─────────────────────────────────────────────────
   return (
-    <div className="max-w-3xl mx-auto">
+    <div className="max-w-4xl mx-auto space-y-6 p-4 sm:p-6">
       {/* En-tête */}
-      <div className="mb-8">
-        <Link
-          href="/documents"
-          className="inline-flex items-center gap-2 text-sm text-gray-500 hover:text-gray-700 mb-4 transition-colors"
-        >
-          <ArrowLeft className="h-4 w-4" />
-          Retour aux documents
+      <div className="flex items-center gap-4 border-b border-gray-100 pb-4">
+        <Link href="/documents">
+          <Button variant="outline" size="icon" type="button" className="h-9 w-9">
+            <ArrowLeft className="h-4 w-4" />
+          </Button>
         </Link>
-        <h1 className="text-2xl lg:text-3xl font-bold text-gray-900">
-          Uploader des documents
-        </h1>
-        <p className="text-gray-500 mt-1">
-          Factures, tickets, devis — l&apos;IA extrait les infos automatiquement
-        </p>
-      </div>
-
-      {/* Zone de drop */}
-      <div
-        onDragOver={handleDragOver}
-        onDragLeave={handleDragLeave}
-        onDrop={handleDrop}
-        onClick={() => inputRef.current?.click()}
-        className={`
-          relative border-2 border-dashed rounded-2xl p-10 text-center cursor-pointer
-          transition-all duration-200
-          ${
-            isDragging
-              ? 'border-blue-500 bg-blue-50 scale-[1.01]'
-              : 'border-gray-300 bg-white hover:border-blue-400 hover:bg-blue-50/30'
-          }
-        `}
-      >
-        <input
-          ref={inputRef}
-          type="file"
-          multiple
-          accept=".pdf,.jpg,.jpeg,.png,.webp,.heic,image/*,application/pdf"
-          className="hidden"
-          onChange={(e) => {
-            if (e.target.files?.length) addFiles(e.target.files)
-            e.target.value = ''
-          }}
-        />
-
-        <div className="w-16 h-16 bg-blue-100 rounded-full flex items-center justify-center mx-auto mb-4">
-          <Upload className="h-8 w-8 text-blue-600" />
+        <div>
+          <h1 className="text-2xl font-bold text-gray-900 tracking-tight">Scanner / Déposer des pièces</h1>
+          <p className="text-sm text-gray-500">
+            Prenez vos tickets en photo ou déposez vos factures PDF.
+          </p>
         </div>
-
-        <h3 className="text-lg font-semibold text-gray-900 mb-2">
-          {isDragging
-            ? 'Déposez vos fichiers ici'
-            : 'Glissez-déposez vos documents'}
-        </h3>
-        <p className="text-sm text-gray-500 mb-4">
-          ou cliquez pour sélectionner des fichiers
-        </p>
-        <p className="text-xs text-gray-400">
-          PDF, JPG, PNG, WEBP · Max {formatFileSize(MAX_FILE_SIZE)} par fichier
-        </p>
       </div>
 
-      {/* Erreur globale */}
-      {globalError && (
-        <div className="mt-4 bg-red-50 text-red-600 text-sm p-4 rounded-lg flex items-start gap-3">
+      {error && (
+        <div className="p-4 rounded-xl bg-red-50 border border-red-200 flex items-start gap-3 text-red-700 text-sm">
           <AlertCircle className="h-5 w-5 flex-shrink-0 mt-0.5" />
-          <span>{globalError}</span>
+          <span>{error}</span>
         </div>
       )}
 
-      {/* Liste des fichiers */}
-      {files.length > 0 && (
-        <div className="mt-6 bg-white rounded-xl border border-gray-200 shadow-sm overflow-hidden">
-          <div className="px-6 py-4 border-b border-gray-100 flex items-center justify-between">
-            <h2 className="font-semibold text-gray-900">
-              {files.length} fichier{files.length > 1 ? 's' : ''} sélectionné
-              {files.length > 1 ? 's' : ''}
-            </h2>
-            {pendingCount > 0 && (
-              <Button
-                onClick={handleUploadAll}
-                disabled={isUploading}
-                className="gap-2"
-              >
-                {isUploading ? (
-                  <>
-                    <Loader2 className="h-4 w-4 animate-spin" />
-                    Upload en cours…
-                  </>
-                ) : (
-                  <>
-                    <Upload className="h-4 w-4" />
-                    Uploader {pendingCount} fichier
-                    {pendingCount > 1 ? 's' : ''}
-                  </>
-                )}
-              </Button>
-            )}
+      {successMsg && (
+        <div className="p-4 rounded-xl bg-emerald-50 border border-emerald-200 flex items-center gap-3 text-emerald-700 text-sm font-medium">
+          <CheckCircle2 className="h-5 w-5 flex-shrink-0 text-emerald-600" />
+          <span>{successMsg}</span>
+        </div>
+      )}
+
+      <form onSubmit={handleSubmit} className="space-y-6">
+        {/* Choix du chantier */}
+        <div className="bg-white p-4 rounded-2xl border border-gray-200/80 space-y-2 shadow-sm">
+          <Label className="flex items-center gap-2 text-gray-700 font-semibold text-sm">
+            <HardHat className="h-4 w-4 text-amber-600" />
+            Rattacher à un chantier (Optionnel)
+          </Label>
+          <Select value={selectedChantier} onValueChange={setSelectedChantier}>
+            <SelectTrigger className="bg-gray-50/50">
+              <SelectValue placeholder="Choisir un chantier..." />
+            </SelectTrigger>
+            <SelectContent>
+              <SelectItem value="none">Aucun chantier particulier</SelectItem>
+              {chantiers.map((c) => (
+                <SelectItem key={c.id} value={c.id}>
+                  {c.name}
+                </SelectItem>
+              ))}
+            </SelectContent>
+          </Select>
+        </div>
+
+        {/* Inputs cachés pour déclencheurs */}
+        <input
+          id="file-input-multi"
+          type="file"
+          multiple
+          accept="image/*,application/pdf"
+          className="hidden"
+          onChange={handleFileChange}
+        />
+        <input
+          ref={nativeCameraInputRef}
+          type="file"
+          accept="image/*"
+          capture="environment"
+          className="hidden"
+          onChange={handleFileChange}
+        />
+
+        {/* Zone de Drag & Drop */}
+        <div
+          onDragOver={(e) => e.preventDefault()}
+          onDrop={handleDrop}
+          onClick={() => document.getElementById('file-input-multi')?.click()}
+          className="border-2 border-dashed border-gray-300 hover:border-amber-500 bg-gray-50/60 hover:bg-amber-50/30 transition-all rounded-2xl p-8 sm:p-12 text-center cursor-pointer flex flex-col items-center justify-center space-y-3 group"
+        >
+          <div className="p-4 bg-white rounded-2xl shadow-sm border border-gray-100 group-hover:scale-110 transition-transform">
+            <Upload className="h-8 w-8 text-amber-600" />
           </div>
+          <div>
+            <p className="text-base font-bold text-gray-900">
+              Glissez vos tickets / factures ici ou cliquez pour choisir
+            </p>
+            <p className="text-xs text-gray-500 mt-1">
+              JPG, PNG, WEBP, PDF — Jusqu'à 12 Mo par fichier
+            </p>
+          </div>
+        </div>
 
-          <div className="divide-y divide-gray-50">
-            {files.map((item) => (
-              <div
-                key={item.id}
-                className="flex items-center gap-4 px-6 py-4"
+        {/* Boutons d'action : Photo vs Galerie */}
+        <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+          <button
+            type="button"
+            onClick={handleCameraClick}
+            className="flex items-center justify-center gap-2.5 p-4 rounded-xl border-2 border-amber-300 bg-amber-50 text-amber-900 font-bold hover:bg-amber-100 transition-colors shadow-sm"
+          >
+            <Camera className="h-5 w-5 text-amber-600" />
+            Prendre une photo en direct
+          </button>
+
+          <button
+            type="button"
+            className="flex items-center justify-center gap-2.5 p-4 rounded-xl border-2 border-gray-200 bg-white text-gray-800 font-medium hover:bg-gray-50 transition-colors shadow-sm"
+            onClick={() => document.getElementById('file-input-multi')?.click()}
+          >
+            <ImageIcon className="h-5 w-5 text-gray-500" />
+            Choisir dans la galerie / dossier
+          </button>
+        </div>
+
+        {/* File d'attente des fichiers sélectionnés */}
+        {files.length > 0 && (
+          <div className="bg-white rounded-2xl border border-gray-200 p-4 space-y-3 shadow-sm">
+            <div className="flex items-center justify-between border-b pb-3">
+              <h3 className="font-bold text-gray-900 text-sm">
+                Fichiers prêts à l'envoi ({files.length})
+              </h3>
+              <Button
+                type="button"
+                variant="ghost"
+                size="sm"
+                className="text-xs text-red-600 hover:text-red-700 hover:bg-red-50"
+                onClick={() => setFiles([])}
               >
-                {/* Icône */}
+                Tout effacer
+              </Button>
+            </div>
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 max-h-60 overflow-y-auto">
+              {files.map((file, index) => (
                 <div
-                  className={`
-                    w-10 h-10 rounded-lg flex items-center justify-center flex-shrink-0
-                    ${
-                      item.status === 'success'
-                        ? 'bg-green-100 text-green-600'
-                        : item.status === 'error'
-                          ? 'bg-red-100 text-red-600'
-                          : item.status === 'uploading'
-                            ? 'bg-blue-100 text-blue-600'
-                            : 'bg-gray-100 text-gray-600'
-                    }
-                  `}
+                  key={index}
+                  className="flex items-center justify-between p-3 bg-gray-50 rounded-xl border border-gray-200 text-sm"
                 >
-                  {item.status === 'success' ? (
-                    <CheckCircle2 className="h-5 w-5" />
-                  ) : item.status === 'error' ? (
-                    <AlertCircle className="h-5 w-5" />
-                  ) : item.status === 'uploading' ? (
-                    <Loader2 className="h-5 w-5 animate-spin" />
-                  ) : (
-                    getFileIcon(item.file.type)
-                  )}
-                </div>
-
-                {/* Infos */}
-                <div className="flex-1 min-w-0">
-                  <p className="font-medium text-gray-900 truncate text-sm">
-                    {item.file.name}
-                  </p>
-                  <p className="text-xs text-gray-500 mt-0.5">
-                    {formatFileSize(item.file.size)}
-                    {item.status === 'error' && item.error && (
-                      <span className="text-red-500"> · {item.error}</span>
+                  <div className="flex items-center gap-3 truncate">
+                    {file.type.startsWith('image/') ? (
+                      <ImageIcon className="h-5 w-5 text-blue-600 flex-shrink-0" />
+                    ) : (
+                      <FileText className="h-5 w-5 text-red-600 flex-shrink-0" />
                     )}
-                    {item.status === 'success' && (
-                      <span className="text-green-600"> · Uploadé avec succès</span>
-                    )}
-                    {item.status === 'uploading' && (
-                      <span className="text-blue-600">
-                        {' '}
-                        · Upload… {item.progress}%
-                      </span>
-                    )}
-                  </p>
-
-                  {/* Barre de progression */}
-                  {item.status === 'uploading' && (
-                    <div className="mt-2 h-1.5 bg-gray-100 rounded-full overflow-hidden">
-                      <div
-                        className="h-full bg-blue-600 rounded-full transition-all duration-300"
-                        style={{ width: `${item.progress}%` }}
-                      />
+                    <div className="truncate">
+                      <p className="font-semibold text-gray-900 text-xs truncate">{file.name}</p>
+                      <p className="text-[10px] text-gray-400">
+                        {(file.size / 1024 / 1024).toFixed(2)} Mo
+                      </p>
                     </div>
-                  )}
-                </div>
-
-                {/* Bouton supprimer */}
-                {(item.status === 'idle' || item.status === 'error') && (
+                  </div>
                   <button
-                    onClick={(e) => {
-                      e.stopPropagation()
-                      removeFile(item.id)
-                    }}
-                    className="p-2 text-gray-400 hover:text-red-500 hover:bg-red-50 rounded-lg transition-colors"
-                    aria-label="Supprimer"
+                    type="button"
+                    onClick={() => removeFile(index)}
+                    className="text-gray-400 hover:text-red-600 p-1 rounded-md hover:bg-gray-200/50"
                   >
                     <X className="h-4 w-4" />
                   </button>
-                )}
-              </div>
-            ))}
-          </div>
-
-          {/* Footer actions */}
-          {allDone && successCount > 0 && (
-            <div className="px-6 py-4 bg-green-50 border-t border-green-100 flex flex-col sm:flex-row items-center justify-between gap-3">
-              <p className="text-sm text-green-700 font-medium">
-                {successCount} document{successCount > 1 ? 's' : ''} uploadé
-                {successCount > 1 ? 's' : ''} avec succès
-              </p>
-              <div className="flex gap-3">
-                <Button
-                  variant="outline"
-                  onClick={() => setFiles([])}
-                >
-                  Uploader d&apos;autres
-                </Button>
-                <Button onClick={() => router.push('/documents')}>
-                  Voir mes documents
-                </Button>
-              </div>
+                </div>
+              ))}
             </div>
+          </div>
+        )}
+
+        <Button
+          type="submit"
+          disabled={files.length === 0 || uploading}
+          className="w-full bg-amber-600 hover:bg-amber-700 text-white h-12 text-base font-bold shadow-md gap-2 rounded-xl"
+        >
+          {uploading ? (
+            <>
+              <Loader2 className="h-5 w-5 animate-spin" />
+              Envoi & analyse IA en cours...
+            </>
+          ) : (
+            <>
+              <Upload className="h-5 w-5" />
+              Envoyer et analyser {files.length > 0 ? `(${files.length})` : ''}
+            </>
           )}
+        </Button>
+      </form>
+
+      {/* MODAL WEBCAM (DESKTOP) */}
+      {showWebcam && (
+        <div className="fixed inset-0 bg-slate-900/80 backdrop-blur-sm z-50 flex items-center justify-center p-4">
+          <div className="bg-white rounded-2xl max-w-lg w-full p-6 space-y-4 shadow-2xl relative">
+            <div className="flex items-center justify-between border-b pb-3">
+              <h3 className="font-bold text-gray-900 text-base flex items-center gap-2">
+                <Camera className="h-5 w-5 text-amber-600" /> Prise de photo en direct
+              </h3>
+              <button onClick={stopWebcam} className="text-gray-400 hover:text-gray-700 p-1">
+                <X className="h-6 w-6" />
+              </button>
+            </div>
+
+            {webcamError ? (
+              <div className="p-4 bg-red-50 text-red-700 text-xs rounded-xl border border-red-200 space-y-2">
+                <p className="font-bold flex items-center gap-1.5"><AlertCircle className="h-4 w-4" /> Impossible d'activer la caméra</p>
+                <p>{webcamError}</p>
+              </div>
+            ) : (
+              <div className="aspect-[4/3] bg-black rounded-xl overflow-hidden relative flex items-center justify-center">
+                {cameraLoading && (
+                  <div className="text-white text-xs flex items-center gap-2">
+                    <Loader2 className="h-5 w-5 animate-spin text-amber-500" />
+                    Activation de la caméra...
+                  </div>
+                )}
+                <video ref={videoRef} autoPlay playsInline className="w-full h-full object-cover" />
+              </div>
+            )}
+
+            <div className="flex items-center justify-end gap-2 pt-2 border-t">
+              <Button type="button" variant="outline" onClick={stopWebcam}>
+                Fermer
+              </Button>
+              {!webcamError && (
+                <Button type="button" onClick={captureSnapshot} className="bg-amber-600 hover:bg-amber-700 text-white gap-2 font-semibold">
+                  <Camera className="h-4 w-4" />
+                  Prendre la photo
+                </Button>
+              )}
+            </div>
+          </div>
         </div>
       )}
-
-      {/* Astuce */}
-      <div className="mt-8 bg-blue-50 rounded-xl p-5 border border-blue-100">
-        <h3 className="text-sm font-semibold text-blue-900 mb-2">
-          💡 Astuce pour les artisans
-        </h3>
-        <ul className="text-sm text-blue-800 space-y-1">
-          <li>• Photographiez vos tickets directement depuis le chantier</li>
-          <li>• Les PDF de factures fournisseurs fonctionnent le mieux</li>
-          <li>• L&apos;IA extrait automatiquement : montant, TVA, fournisseur, date</li>
-        </ul>
-      </div>
     </div>
   )
 }

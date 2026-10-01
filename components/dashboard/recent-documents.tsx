@@ -117,8 +117,7 @@ function formatDate(dateString: string): string {
 }
 
 // ─── Skeleton Loader ─────────────────────────────────────────
-function DocumentRowSkeleton() {
-  return (
+function DocumentRowSkeleton() {return(
     <div className="flex items-center justify-between p-4 animate-pulse">
       <div className="flex items-center gap-4">
         <div className="w-10 h-10 bg-gray-200 rounded-lg" />

@@ -1,4 +1,4 @@
-'use client'
+﻿'use client'
 
 import { useEffect, useState, useCallback } from 'react'
 import Link from 'next/link'
@@ -6,23 +6,12 @@ import { createClient } from '@/lib/supabase/client'
 import { useAuth } from '@/hooks/use-auth'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
-import {
-  Select,
-  SelectContent,
-  SelectItem,
-  SelectTrigger,
-  SelectValue,
-} from '@/components/ui/select'
-import { Loader2, Upload, Search, FileText, Filter } from 'lucide-react'
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
+import { Loader2, Upload, Search, FileText, Filter, Trash2, Building2, Eye, Receipt } from 'lucide-react'
 
-// ─── Types ───────────────────────────────────────────────────
+// ─── Types ──────────────────────────────────────────────────────────
 type DocumentStatus = 'uploaded' | 'analyzing' | 'analyzed' | 'validated' | 'error'
-type DocumentType =
-  | 'supplier_invoice'
-  | 'customer_invoice'
-  | 'receipt'
-  | 'quote'
-  | 'other'
+type DocumentType = 'supplier_invoice' | 'customer_invoice' | 'receipt' | 'quote' | 'other'
 
 interface DocumentItem {
   id: string
@@ -32,121 +21,64 @@ interface DocumentItem {
   document_type: DocumentType | null
   extracted_data: {
     third_party_name?: string | null
+    amount_ht?: number | null
+    amount_vat?: number | null
     amount_ttc?: number | null
     transaction_date?: string | null
     invoice_number?: string | null
   } | null
+  chantiers?: { id: string; name: string } | null
   confidence_score: number | null
   created_at: string
 }
 
-// ─── Config UI ───────────────────────────────────────────────
-const statusConfig: Record<
-  DocumentStatus,
-  { label: string; className: string }
-> = {
-  uploaded: {
-    label: 'Uploadé',
-    className: 'bg-gray-100 text-gray-700 border border-gray-200',
-  },
-  analyzing: {
-    label: 'Analyse IA…',
-    className: 'bg-blue-50 text-blue-700 border border-blue-200',
-  },
-  analyzed: {
-    label: 'Analysé',
-    className: 'bg-amber-50 text-amber-700 border border-amber-200',
-  },
-  validated: {
-    label: 'Validé',
-    className: 'bg-green-50 text-green-700 border border-green-200',
-  },
-  error: {
-    label: 'Erreur',
-    className: 'bg-red-50 text-red-700 border border-red-200',
-  },
+// ─── Config UI ──────────────────────────────────────────────────────
+const statusConfig: Record<DocumentStatus, { label: string; className: string }> = {
+  uploaded: { label: 'Uploadé', className: 'bg-gray-100 text-gray-700 border-gray-200' },
+  analyzing: { label: 'Analyse IA...', className: 'bg-blue-50 text-blue-700 border-blue-200 animate-pulse' },
+  analyzed: { label: 'À vérifier', className: 'bg-amber-50 text-amber-700 border-amber-200' },
+  validated: { label: 'Validé', className: 'bg-emerald-50 text-emerald-700 border-emerald-200' },
+  error: { label: 'Erreur IA', className: 'bg-red-50 text-red-700 border-red-200' },
 }
 
-const typeConfig: Record<
-  DocumentType,
-  { label: string; icon: string; color: string }
-> = {
-  supplier_invoice: { label: 'Facture achat', icon: '🧾', color: 'bg-orange-100' },
-  customer_invoice: { label: 'Facture vente', icon: '💰', color: 'bg-green-100' },
-  receipt: { label: 'Ticket', icon: '🎫', color: 'bg-yellow-100' },
-  quote: { label: 'Devis', icon: '📋', color: 'bg-blue-100' },
-  other: { label: 'Autre', icon: '📄', color: 'bg-gray-100' },
+const typeConfig: Record<DocumentType, { label: string; icon: React.ReactNode; color: string }> = {
+  supplier_invoice: { label: 'Facture Achat', icon: <FileText className="h-5 w-5" />, color: 'bg-orange-100 text-orange-600' },
+  customer_invoice: { label: 'Facture Vente', icon: <FileText className="h-5 w-5" />, color: 'bg-emerald-100 text-emerald-600' },
+  receipt: { label: 'Ticket', icon: <Receipt className="h-5 w-5" />, color: 'bg-amber-100 text-amber-600' },
+  quote: { label: 'Devis', icon: <FileText className="h-5 w-5" />, color: 'bg-blue-100 text-blue-600' },
+  other: { label: 'Autre', icon: <FileText className="h-5 w-5" />, color: 'bg-gray-100 text-gray-600' },
 }
 
-// ─── Helpers ─────────────────────────────────────────────────
+// ─── Helpers ────────────────────────────────────────────────────────
 function formatCurrency(amount: number | null | undefined): string {
-  if (amount === null || amount === undefined) return '—'
-  return new Intl.NumberFormat('fr-FR', {
-    style: 'currency',
-    currency: 'EUR',
-  }).format(amount)
+  if (amount === null || amount === undefined) return '0,00 €'
+  return new Intl.NumberFormat('fr-FR', { style: 'currency', currency: 'EUR' }).format(amount)
 }
 
 function formatDate(dateString: string): string {
-  return new Intl.DateTimeFormat('fr-FR', {
-    day: 'numeric',
-    month: 'short',
-    year: 'numeric',
-  }).format(new Date(dateString))
+  return new Intl.DateTimeFormat('fr-FR', { day: '2-digit', month: 'short', year: 'numeric' }).format(new Date(dateString))
 }
 
-// ─── Composant Stats ─────────────────────────────────────────
-function StatsBar({ documents }: { documents: DocumentItem[] }) {
-  const total = documents.length
-  const validated = documents.filter((d) => d.status === 'validated').length
-  const pending = documents.filter((d) =>
-    ['uploaded', 'analyzing', 'analyzed'].includes(d.status)
-  ).length
-  const errors = documents.filter((d) => d.status === 'error').length
-
-  const stats = [
-    { label: 'Total', value: total, color: 'text-gray-900' },
-    { label: 'Validés', value: validated, color: 'text-green-600' },
-    { label: 'En cours', value: pending, color: 'text-amber-600' },
-    { label: 'Erreurs', value: errors, color: 'text-red-600' },
-  ]
-
-  return (
-    <div className="grid grid-cols-2 sm:grid-cols-4 gap-4 mb-6">
-      {stats.map((stat) => (
-        <div
-          key={stat.label}
-          className="bg-white rounded-xl border border-gray-200 p-4 shadow-sm"
-        >
-          <p className="text-sm text-gray-500">{stat.label}</p>
-          <p className={`text-2xl font-bold mt-1 ${stat.color}`}>{stat.value}</p>
-        </div>
-      ))}
-    </div>
-  )
-}
-
-// ─── Page principale ─────────────────────────────────────────
+// ─── Page Principale ────────────────────────────────────────────────
 export default function DocumentsPage() {
   const { user } = useAuth()
   const supabase = createClient()
 
   const [documents, setDocuments] = useState<DocumentItem[]>([])
   const [loading, setLoading] = useState(true)
+  const [deletingId, setDeletingId] = useState<string | null>(null)
   const [error, setError] = useState<string | null>(null)
   const [search, setSearch] = useState('')
   const [statusFilter, setStatusFilter] = useState<string>('all')
   const [typeFilter, setTypeFilter] = useState<string>('all')
 
-  // ─── Charger les documents ─────────────────────────────────
+  // Séparation stricte de la logique de fetch
   const fetchDocuments = useCallback(async () => {
     if (!user) return
-
     setLoading(true)
     setError(null)
 
     try {
-      // Récupérer le profil pour avoir organization_id
       const { data: profile, error: profileError } = await supabase
         .from('profiles')
         .select('organization_id')
@@ -157,27 +89,23 @@ export default function DocumentsPage() {
 
       if (!profile?.organization_id) {
         setDocuments([])
-        setLoading(false)
         return
       }
 
-      // Récupérer les documents de l'organisation
       const { data, error: docsError } = await supabase
         .from('documents')
-        .select('*')
+        .select(`
+          *,
+          chantiers (id, name)
+        `)
         .eq('organization_id', profile.organization_id)
         .order('created_at', { ascending: false })
 
       if (docsError) throw docsError
-
       setDocuments((data as DocumentItem[]) || [])
     } catch (err: unknown) {
       console.error('Erreur chargement documents:', err)
-      setError(
-        err instanceof Error
-          ? err.message
-          : 'Impossible de charger les documents'
-      )
+      setError(err instanceof Error ? err.message : 'Impossible de charger les documents')
     } finally {
       setLoading(false)
     }
@@ -187,254 +115,245 @@ export default function DocumentsPage() {
     fetchDocuments()
   }, [fetchDocuments])
 
-  // ─── Filtrage côté client ──────────────────────────────────
+  // Logique de suppression sortie de la boucle de rendu et sécurisée
+  const handleDeleteDocument = async (e: React.MouseEvent, id: string, name: string) => {
+    e.preventDefault() // Empêche le clic de déclencher le <Link> parent
+    e.stopPropagation()
+
+    const ok = window.confirm(`Supprimer définitivement ce document et toutes les transactions comptables associées ?\n\nFichier : ${name}`)
+    if (!ok) return
+
+    setDeletingId(id)
+    try {
+      // 1. Supprimer les transactions liées (vérifiez si vous avez "ON DELETE CASCADE" en base, sinon c'est obligatoire)
+      await supabase.from('transactions').delete().eq('document_id', id)
+      // 2. Supprimer le document
+      const { error } = await supabase.from('documents').delete().eq('id', id)
+      
+      if (error) throw error
+      
+      // 3. Mise à jour optimiste du state (pas de window.reload ignoble)
+      setDocuments(prev => prev.filter(doc => doc.id !== id))
+    } catch (err: unknown) {
+      alert(err instanceof Error ? err.message : 'Erreur lors de la suppression du document')
+    } finally {
+      setDeletingId(null)
+    }
+  }
+
+  // Filtrage optimisé
   const filteredDocuments = documents.filter((doc) => {
+    const q = search.toLowerCase()
     const matchesSearch =
-      search === '' ||
-      doc.file_name.toLowerCase().includes(search.toLowerCase()) ||
-      doc.extracted_data?.third_party_name
-        ?.toLowerCase()
-        .includes(search.toLowerCase()) ||
-      doc.extracted_data?.invoice_number
-        ?.toLowerCase()
-        .includes(search.toLowerCase())
+      !q ||
+      doc.file_name.toLowerCase().includes(q) ||
+      (doc.extracted_data?.third_party_name || '').toLowerCase().includes(q) ||
+      (doc.extracted_data?.invoice_number || '').toLowerCase().includes(q) ||
+      (doc.chantiers?.name || '').toLowerCase().includes(q)
 
-    const matchesStatus =
-      statusFilter === 'all' || doc.status === statusFilter
-
-    const matchesType =
-      typeFilter === 'all' || doc.document_type === typeFilter
+    const matchesStatus = statusFilter === 'all' || doc.status === statusFilter
+    const matchesType = typeFilter === 'all' || doc.document_type === typeFilter
 
     return matchesSearch && matchesStatus && matchesType
   })
 
-  // ─── Rendu ─────────────────────────────────────────────────
-  return (
-    <div>
-      {/* En-tête */}
-      <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4 mb-8">
-        <div>
-          <h1 className="text-2xl lg:text-3xl font-bold text-gray-900">
-            Documents
-          </h1>
-          <p className="text-gray-500 mt-1">
-            Gérez vos factures, tickets et devis
-          </p>
-        </div>
+  // KPIs
+  const totalDocs = documents.length
+  const validatedDocs = documents.filter((d) => d.status === 'validated').length
+  const pendingDocs = documents.filter((d) => ['uploaded', 'analyzing', 'analyzed'].includes(d.status)).length
 
+  return (
+    <div className="space-y-6 p-4 sm:p-6 max-w-7xl mx-auto">
+      {/* En-tête */}
+      <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4">
+        <div>
+          <h1 className="text-2xl font-bold text-gray-900">Documents & Justificatifs</h1>
+          <p className="text-sm text-gray-500">Centralisez vos factures et tickets. L'IA extrait la comptabilité.</p>
+        </div>
         <Link href="/documents/upload">
-          <Button className="gap-2 shadow-sm">
+          <Button className="bg-amber-600 hover:bg-amber-700 text-white gap-2 shadow-sm">
             <Upload className="h-4 w-4" />
-            Uploader un document
+            Nouveau document
           </Button>
         </Link>
       </div>
 
-      {/* Stats */}
-      {!loading && documents.length > 0 && <StatsBar documents={documents} />}
+      {/* Stats rapides */}
+      {!loading && totalDocs > 0 && (
+        <div className="grid grid-cols-3 gap-4">
+          <div className="bg-white rounded-xl border p-4 shadow-sm">
+            <p className="text-sm text-gray-500 font-medium">Total Documents</p>
+            <p className="text-2xl font-bold text-gray-900 mt-1">{totalDocs}</p>
+          </div>
+          <div className="bg-white rounded-xl border p-4 shadow-sm">
+            <p className="text-sm text-gray-500 font-medium">À vérifier / En cours</p>
+            <p className="text-2xl font-bold text-amber-600 mt-1">{pendingDocs}</p>
+          </div>
+          <div className="bg-white rounded-xl border p-4 shadow-sm">
+            <p className="text-sm text-gray-500 font-medium">Traités & Validés</p>
+            <p className="text-2xl font-bold text-emerald-600 mt-1">{validatedDocs}</p>
+          </div>
+        </div>
+      )}
 
       {/* Barre de filtres */}
-      <div className="bg-white rounded-xl border border-gray-200 p-4 mb-6 shadow-sm">
-        <div className="flex flex-col sm:flex-row gap-3">
-          {/* Recherche */}
-          <div className="relative flex-1">
-            <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-gray-400" />
-            <Input
-              placeholder="Rechercher un document, fournisseur, n° facture…"
-              value={search}
-              onChange={(e) => setSearch(e.target.value)}
-              className="pl-10"
-            />
-          </div>
-
-          {/* Filtre statut */}
-          <Select value={statusFilter} onValueChange={setStatusFilter}>
-            <SelectTrigger className="w-full sm:w-[180px]">
-              <Filter className="h-4 w-4 mr-2 text-gray-400" />
-              <SelectValue placeholder="Statut" />
-            </SelectTrigger>
-            <SelectContent>
-              <SelectItem value="all">Tous les statuts</SelectItem>
-              <SelectItem value="uploaded">Uploadé</SelectItem>
-              <SelectItem value="analyzing">Analyse IA…</SelectItem>
-              <SelectItem value="analyzed">Analysé</SelectItem>
-              <SelectItem value="validated">Validé</SelectItem>
-              <SelectItem value="error">Erreur</SelectItem>
-            </SelectContent>
-          </Select>
-
-          {/* Filtre type */}
-          <Select value={typeFilter} onValueChange={setTypeFilter}>
-            <SelectTrigger className="w-full sm:w-[180px]">
-              <SelectValue placeholder="Type" />
-            </SelectTrigger>
-            <SelectContent>
-              <SelectItem value="all">Tous les types</SelectItem>
-              <SelectItem value="supplier_invoice">Facture achat</SelectItem>
-              <SelectItem value="customer_invoice">Facture vente</SelectItem>
-              <SelectItem value="receipt">Ticket</SelectItem>
-              <SelectItem value="quote">Devis</SelectItem>
-              <SelectItem value="other">Autre</SelectItem>
-            </SelectContent>
-          </Select>
+      <div className="bg-white rounded-xl border p-4 shadow-sm flex flex-col sm:flex-row gap-3">
+        <div className="relative flex-1">
+          <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-gray-400" />
+          <Input
+            placeholder="Chercher un fournisseur, n° de pièce, chantier..."
+            value={search}
+            onChange={(e) => setSearch(e.target.value)}
+            className="pl-9"
+          />
         </div>
+        <Select value={statusFilter} onValueChange={setStatusFilter}>
+          <SelectTrigger className="w-full sm:w-[180px]">
+            <Filter className="h-4 w-4 mr-2 text-gray-400" />
+            <SelectValue placeholder="Statut" />
+          </SelectTrigger>
+          <SelectContent>
+            <SelectItem value="all">Tous les statuts</SelectItem>
+            <SelectItem value="uploaded">Uploadé</SelectItem>
+            <SelectItem value="analyzing">Analyse IA...</SelectItem>
+            <SelectItem value="analyzed">À vérifier</SelectItem>
+            <SelectItem value="validated">Validé</SelectItem>
+            <SelectItem value="error">Erreur</SelectItem>
+          </SelectContent>
+        </Select>
+        <Select value={typeFilter} onValueChange={setTypeFilter}>
+          <SelectTrigger className="w-full sm:w-[180px]">
+            <SelectValue placeholder="Type" />
+          </SelectTrigger>
+          <SelectContent>
+            <SelectItem value="all">Tous les types</SelectItem>
+            <SelectItem value="supplier_invoice">Facture Achat</SelectItem>
+            <SelectItem value="customer_invoice">Facture Vente</SelectItem>
+            <SelectItem value="receipt">Ticket</SelectItem>
+            <SelectItem value="quote">Devis</SelectItem>
+          </SelectContent>
+        </Select>
       </div>
 
       {/* Contenu principal */}
-      <div className="bg-white rounded-xl border border-gray-200 shadow-sm overflow-hidden">
-        {/* Loading */}
-        {loading && (
-          <div className="flex items-center justify-center py-20">
-            <Loader2 className="h-8 w-8 animate-spin text-blue-600" />
-            <span className="ml-3 text-gray-500">Chargement des documents…</span>
+      <div className="bg-white rounded-xl border shadow-sm overflow-hidden">
+        {loading ? (
+          <div className="flex flex-col items-center justify-center py-20">
+            <Loader2 className="h-8 w-8 animate-spin text-amber-600 mb-4" />
+            <span className="text-gray-500">Chargement de vos documents...</span>
           </div>
-        )}
-
-        {/* Erreur */}
-        {!loading && error && (
-          <div className="p-8 text-center">
-            <div className="bg-red-50 text-red-600 text-sm p-4 rounded-lg inline-block">
-              {error}
-            </div>
-            <div className="mt-4">
-              <Button variant="outline" onClick={fetchDocuments}>
-                Réessayer
-              </Button>
-            </div>
+        ) : error ? (
+          <div className="p-12 text-center space-y-4">
+            <div className="bg-red-50 text-red-700 p-4 rounded-lg inline-block">{error}</div>
+            <Button variant="outline" onClick={fetchDocuments}>Réessayer</Button>
           </div>
-        )}
-
-        {/* État vide */}
-        {!loading && !error && documents.length === 0 && (
-          <div className="p-12 text-center">
-            <div className="w-16 h-16 bg-blue-50 rounded-full flex items-center justify-center mx-auto mb-4">
-              <FileText className="h-8 w-8 text-blue-600" />
+        ) : totalDocs === 0 ? (
+          <div className="p-16 text-center space-y-4">
+            <div className="w-16 h-16 bg-amber-50 rounded-full flex items-center justify-center mx-auto">
+              <Upload className="h-8 w-8 text-amber-600" />
             </div>
-            <h3 className="text-lg font-semibold text-gray-900 mb-2">
-              Aucun document pour le moment
-            </h3>
-            <p className="text-sm text-gray-500 mb-6 max-w-sm mx-auto">
-              Uploadez votre première facture ou ticket. L&apos;IA extraira
-              automatiquement les informations comptables.
-            </p>
+            <h3 className="text-lg font-bold text-gray-900">Aucun document importé</h3>
+            <p className="text-gray-500 max-w-md mx-auto">Prenez en photo vos tickets de caisse ou importez vos factures PDF. Notre IA se charge d'en extraire les données comptables.</p>
             <Link href="/documents/upload">
-              <Button className="gap-2">
-                <Upload className="h-4 w-4" />
-                Uploader mon premier document
-              </Button>
+              <Button className="bg-amber-600 hover:bg-amber-700 text-white mt-4">Importer mon premier document</Button>
             </Link>
           </div>
-        )}
+        ) : filteredDocuments.length === 0 ? (
+          <div className="p-12 text-center text-gray-500">
+            Aucun document ne correspond à vos critères de recherche.
+          </div>
+        ) : (
+          <div className="overflow-x-auto">
+            <table className="w-full text-sm text-left">
+              <thead className="bg-gray-50 border-b text-xs text-gray-500 uppercase tracking-wider">
+                <tr>
+                  <th className="px-4 py-3">Fichier & Fournisseur</th>
+                  <th className="px-4 py-3">Type</th>
+                  <th className="px-4 py-3">Chantier</th>
+                  <th className="px-4 py-3">Date</th>
+                  <th className="px-4 py-3 text-right">HT / TVA</th>
+                  <th className="px-4 py-3 text-right">TTC</th>
+                  <th className="px-4 py-3 text-center">Statut</th>
+                  <th className="px-4 py-3 text-right">Actions</th>
+                </tr>
+              </thead>
+              <tbody className="divide-y divide-gray-100">
+                {filteredDocuments.map((doc) => {
+                  const type = doc.document_type ? typeConfig[doc.document_type] : typeConfig.other
+                  const status = statusConfig[doc.status]
+                  
+                  // Calculs intelligents des montants
+                  const ttc = doc.extracted_data?.amount_ttc || 0
+                  const ht = doc.extracted_data?.amount_ht ?? (ttc ? ttc / 1.2 : 0)
+                  const vat = doc.extracted_data?.amount_vat ?? (ttc ? ttc - ht : 0)
 
-        {/* Aucun résultat après filtre */}
-        {!loading &&
-          !error &&
-          documents.length > 0 &&
-          filteredDocuments.length === 0 && (
-            <div className="p-12 text-center">
-              <p className="text-gray-500">
-                Aucun document ne correspond à vos filtres.
-              </p>
-              <Button
-                variant="outline"
-                className="mt-4"
-                onClick={() => {
-                  setSearch('')
-                  setStatusFilter('all')
-                  setTypeFilter('all')
-                }}
-              >
-                Réinitialiser les filtres
-              </Button>
-            </div>
-          )}
-
-        {/* Liste des documents */}
-        {!loading && !error && filteredDocuments.length > 0 && (
-          <>
-            {/* Header tableau (desktop) */}
-            <div className="hidden md:grid grid-cols-12 gap-4 px-6 py-3 bg-gray-50 border-b border-gray-100 text-xs font-medium text-gray-500 uppercase tracking-wider">
-              <div className="col-span-4">Document</div>
-              <div className="col-span-2">Type</div>
-              <div className="col-span-2">Montant TTC</div>
-              <div className="col-span-2">Date</div>
-              <div className="col-span-2">Statut</div>
-            </div>
-
-            <div className="divide-y divide-gray-50">
-              {filteredDocuments.map((doc) => {
-                const type = doc.document_type
-                  ? typeConfig[doc.document_type]
-                  : typeConfig.other
-                const status = statusConfig[doc.status]
-
-                return (
-                  <Link
-                    key={doc.id}
-                    href={`/documents/${doc.id}`}
-                    className="grid grid-cols-1 md:grid-cols-12 gap-2 md:gap-4 px-6 py-4 hover:bg-gray-50/80 transition-colors group items-center"
-                  >
-                    {/* Document */}
-                    <div className="md:col-span-4 flex items-center gap-3 min-w-0">
-                      <div
-                        className={`w-10 h-10 ${type.color} rounded-lg flex items-center justify-center text-lg flex-shrink-0`}
-                      >
-                        {type.icon}
-                      </div>
-                      <div className="min-w-0">
-                        <p className="font-medium text-gray-900 truncate group-hover:text-blue-600 transition-colors">
-                          {doc.extracted_data?.third_party_name || doc.file_name}
-                        </p>
-                        <p className="text-xs text-gray-500 truncate">
-                          {doc.extracted_data?.invoice_number
-                            ? `N° ${doc.extracted_data.invoice_number}`
-                            : doc.file_name}
-                        </p>
-                      </div>
-                    </div>
-
-                    {/* Type */}
-                    <div className="md:col-span-2">
-                      <span className="text-sm text-gray-600">{type.label}</span>
-                    </div>
-
-                    {/* Montant */}
-                    <div className="md:col-span-2">
-                      <span className="text-sm font-semibold text-gray-900">
-                        {formatCurrency(doc.extracted_data?.amount_ttc)}
-                      </span>
-                    </div>
-
-                    {/* Date */}
-                    <div className="md:col-span-2">
-                      <span className="text-sm text-gray-500">
-                        {doc.extracted_data?.transaction_date
-                          ? formatDate(doc.extracted_data.transaction_date)
-                          : formatDate(doc.created_at)}
-                      </span>
-                    </div>
-
-                    {/* Statut */}
-                    <div className="md:col-span-2">
-                      <span
-                        className={`inline-flex px-2.5 py-1 rounded-full text-[11px] font-medium ${status.className}`}
-                      >
-                        {status.label}
-                      </span>
-                    </div>
-                  </Link>
-                )
-              })}
-            </div>
-
-            {/* Footer */}
-            <div className="px-6 py-3 bg-gray-50/50 border-t border-gray-100 text-sm text-gray-500">
-              {filteredDocuments.length} document
-              {filteredDocuments.length > 1 ? 's' : ''}
-              {filteredDocuments.length !== documents.length &&
-                ` sur ${documents.length}`}
-            </div>
-          </>
+                  return (
+                    <tr key={doc.id} className="hover:bg-gray-50/80 transition-colors group">
+                      <td className="px-4 py-3">
+                        <div className="flex items-center gap-3">
+                          <div className={`w-9 h-9 rounded-lg flex items-center justify-center shrink-0 ${type.color}`}>
+                            {type.icon}
+                          </div>
+                          <div className="min-w-0">
+                            <p className="font-semibold text-gray-900 truncate">
+                              {doc.extracted_data?.third_party_name || doc.file_name}
+                            </p>
+                            <p className="text-xs text-gray-500 truncate">
+                              {doc.extracted_data?.invoice_number ? `N° ${doc.extracted_data.invoice_number}` : 'Sans numéro'}
+                            </p>
+                          </div>
+                        </div>
+                      </td>
+                      <td className="px-4 py-3 text-gray-600">{type.label}</td>
+                      <td className="px-4 py-3">
+                        {doc.chantiers?.name ? (
+                          <span className="inline-flex items-center gap-1 text-xs text-amber-800 bg-amber-50 px-2 py-0.5 rounded border border-amber-200">
+                            <Building2 className="h-3 w-3" />
+                            {doc.chantiers.name}
+                          </span>
+                        ) : (
+                          <span className="text-xs text-gray-400 italic">Non rattaché</span>
+                        )}
+                      </td>
+                      <td className="px-4 py-3 text-gray-600">
+                        {doc.extracted_data?.transaction_date ? formatDate(doc.extracted_data.transaction_date) : formatDate(doc.created_at)}
+                      </td>
+                      <td className="px-4 py-3 text-right">
+                        <p className="text-gray-900 font-mono text-sm">{formatCurrency(ht)}</p>
+                        <p className="text-gray-400 font-mono text-xs">+ {formatCurrency(vat)}</p>
+                      </td>
+                      <td className="px-4 py-3 text-right font-bold text-gray-900 font-mono">
+                        {formatCurrency(ttc)}
+                      </td>
+                      <td className="px-4 py-3 text-center">
+                        <span className={`inline-flex px-2.5 py-0.5 rounded-full text-xs font-medium border ${status.className}`}>
+                          {status.label}
+                        </span>
+                      </td>
+                      <td className="px-4 py-3 text-right">
+                        <div className="flex items-center justify-end gap-2 opacity-100 sm:opacity-0 sm:group-hover:opacity-100 transition-opacity">
+                          <Link href={`/documents/${doc.id}`}>
+                            <Button variant="ghost" size="sm" className="h-8 w-8 p-0 text-blue-600 hover:text-blue-700 hover:bg-blue-50">
+                              <Eye className="h-4 w-4" />
+                            </Button>
+                          </Link>
+                          <Button
+                            variant="ghost"
+                            size="sm"
+                            className="h-8 w-8 p-0 text-red-600 hover:text-red-700 hover:bg-red-50"
+                            disabled={deletingId === doc.id}
+                            onClick={(e) => handleDeleteDocument(e, doc.id, doc.file_name)}
+                          >
+                            {deletingId === doc.id ? <Loader2 className="h-4 w-4 animate-spin" /> : <Trash2 className="h-4 w-4" />}
+                          </Button>
+                        </div>
+                      </td>
+                    </tr>
+                  )
+                })}
+              </tbody>
+            </table>
+          </div>
         )}
       </div>
     </div>

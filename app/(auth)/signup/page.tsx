@@ -75,8 +75,7 @@ export default function SignupPage() {
     setLoading(false)
   }
 
-  if (success) {
-    return (
+  if (success) {return(
       <div className="min-h-screen flex items-center justify-center bg-gray-50 px-4">
         <Card className="w-full max-w-md">
           <CardHeader className="text-center">

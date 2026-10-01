@@ -1,6 +1,6 @@
-'use client'
+﻿'use client'
 
-import { useEffect, useState, useCallback } from 'react'
+import { useCallback, useEffect, useState } from 'react'
 import { useParams, useRouter } from 'next/navigation'
 import Link from 'next/link'
 import { createClient } from '@/lib/supabase/client'
@@ -8,13 +8,7 @@ import { useAuth } from '@/hooks/use-auth'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
-import {
-  Select,
-  SelectContent,
-  SelectItem,
-  SelectTrigger,
-  SelectValue,
-} from '@/components/ui/select'
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
 import {
   ArrowLeft,
   Loader2,
@@ -24,17 +18,21 @@ import {
   AlertCircle,
   Save,
   Trash2,
+  HardHat,
+  Percent,
+  ShieldAlert,
   RefreshCw,
+  Tag,
 } from 'lucide-react'
 
-// ─── Types ───────────────────────────────────────────────────
 type DocumentStatus = 'uploaded' | 'analyzing' | 'analyzed' | 'validated' | 'error'
-type DocumentType =
-  | 'supplier_invoice'
-  | 'customer_invoice'
-  | 'receipt'
-  | 'quote'
-  | 'other'
+type DocumentType = 'supplier_invoice' | 'customer_invoice' | 'receipt' | 'quote' | 'other'
+
+interface VatRateDetail {
+  rate: number
+  base_ht: number
+  vat_amount: number
+}
 
 interface ExtractedData {
   document_type?: DocumentType | null
@@ -47,7 +45,8 @@ interface ExtractedData {
   category?: string | null
   payment_status?: 'paid' | 'unpaid' | 'unknown' | null
   confidence_score?: number | null
-  needs_review?: boolean | null
+  vat_rates?: VatRateDetail[]
+  is_autoliquidation?: boolean
 }
 
 interface DocumentDetail {
@@ -61,69 +60,49 @@ interface DocumentDetail {
   document_type: DocumentType | null
   extracted_data: ExtractedData | null
   confidence_score: number | null
+  chantier_id: string | null
   created_at: string
 }
 
-// ─── Config ──────────────────────────────────────────────────
-const statusConfig: Record<DocumentStatus, { label: string; className: string }> = {
-  uploaded: { label: 'Uploadé', className: 'bg-gray-100 text-gray-700 border border-gray-200' },
-  analyzing: { label: 'Analyse IA…', className: 'bg-blue-50 text-blue-700 border border-blue-200' },
-  analyzed: { label: 'Analysé', className: 'bg-amber-50 text-amber-700 border border-amber-200' },
-  validated: { label: 'Validé', className: 'bg-green-50 text-green-700 border border-green-200' },
-  error: { label: 'Erreur', className: 'bg-red-50 text-red-700 border border-red-200' },
+interface ChantierItem {
+  id: string
+  name: string
 }
-
-const DOCUMENT_TYPES: { value: DocumentType; label: string }[] = [
-  { value: 'supplier_invoice', label: 'Facture fournisseur (achat)' },
-  { value: 'customer_invoice', label: 'Facture client (vente)' },
-  { value: 'receipt', label: 'Ticket / Reçu' },
-  { value: 'quote', label: 'Devis' },
-  { value: 'other', label: 'Autre' },
-]
-
-const PAYMENT_STATUSES = [
-  { value: 'paid', label: 'Payé' },
-  { value: 'unpaid', label: 'Impayé' },
-  { value: 'unknown', label: 'Inconnu' },
-]
 
 const CATEGORIES = [
-  'Fournitures chantier',
-  'Outillage',
-  'Sous-traitance',
-  'Carburant',
-  'Location matériel',
-  'Assurances',
-  'Frais généraux',
-  'Honoraires',
-  'Autres charges',
-  'Ventes / Prestations',
+  { value: 'Matières premières BTP', label: 'Matières premières & Matériaux (601)' },
+  { value: 'Sous-traitance BTP', label: 'Sous-traitance & Prestations (604)' },
+  { value: 'Outillage & Petit équipement', label: 'Outillage & Équipement (6063)' },
+  { value: 'Carburant & Déplacements', label: 'Carburant & Déplacements (6251)' },
+  { value: 'Frais de repas chantier', label: 'Frais de repas (6257)' },
+  { value: 'Autre dépense', label: 'Autre charge générale' },
 ]
 
-function formatCurrency(value: number | null | undefined): string {
-  if (value === null || value === undefined || Number.isNaN(value)) return '—'
-  return new Intl.NumberFormat('fr-FR', { style: 'currency', currency: 'EUR' }).format(value)
+function formatCurrency(amount: number | null | undefined): string {
+  if (amount === null || amount === undefined || Number.isNaN(Number(amount))) return '0,00 €'
+  return new Intl.NumberFormat('fr-FR', { style: 'currency', currency: 'EUR' }).format(Number(amount))
 }
 
-function formatDate(dateString: string | null | undefined): string {
-  if (!dateString) return '—'
-  return new Intl.DateTimeFormat('fr-FR', {
-    day: 'numeric',
-    month: 'long',
-    year: 'numeric',
-  }).format(new Date(dateString))
-}
-
-function toInputDate(dateString: string | null | undefined): string {
-  if (!dateString) return ''
-  try {
-    return new Date(dateString).toISOString().slice(0, 10)
-  } catch {
-    return ''
+function toInputDateString(dateStr: string | null | undefined): string {
+  if (!dateStr) return new Date().toISOString().slice(0, 10)
+  if (/^\d{4}-\d{2}-\d{2}/.test(dateStr)) return dateStr.slice(0, 10)
+  
+  if (dateStr.includes('/')) {
+    const parts = dateStr.split('/')
+    if (parts.length === 3) {
+      const year = parts[2].length === 2 ? `20${parts[2]}` : parts[2]
+      return `${year}-${parts[1].padStart(2, '0')}-${parts[0].padStart(2, '0')}`
+    }
   }
+  
+  const d = new Date(dateStr)
+  if (!isNaN(d.getTime())) {
+    return d.toISOString().slice(0, 10)
+  }
+  
+  return new Date().toISOString().slice(0, 10)
 }
 
-// ─── Page ────────────────────────────────────────────────────
 export default function DocumentDetailPage() {
   const params = useParams()
   const router = useRouter()
@@ -133,6 +112,7 @@ export default function DocumentDetailPage() {
   const documentId = params?.id as string
 
   const [doc, setDoc] = useState<DocumentDetail | null>(null)
+  const [chantiersList, setChantiersList] = useState<ChantierItem[]>([])
   const [loading, setLoading] = useState(true)
   const [saving, setSaving] = useState(false)
   const [analyzing, setAnalyzing] = useState(false)
@@ -140,62 +120,60 @@ export default function DocumentDetailPage() {
   const [error, setError] = useState<string | null>(null)
   const [success, setSuccess] = useState<string | null>(null)
 
-  // Formulaire éditable (données extraites)
   const [thirdParty, setThirdParty] = useState('')
   const [invoiceNumber, setInvoiceNumber] = useState('')
   const [transactionDate, setTransactionDate] = useState('')
   const [amountHt, setAmountHt] = useState('')
   const [vatAmount, setVatAmount] = useState('')
   const [amountTtc, setAmountTtc] = useState('')
-  const [documentType, setDocumentType] = useState<DocumentType | ''>('')
-  const [category, setCategory] = useState('')
-  const [paymentStatus, setPaymentStatus] = useState<'paid' | 'unpaid' | 'unknown'>('unknown')
+  const [documentType, setDocumentType] = useState<DocumentType>('supplier_invoice')
+  const [category, setCategory] = useState('Matières premières BTP')
+  const [paymentStatus, setPaymentStatus] = useState<'paid' | 'unpaid' | 'unknown'>('paid')
+  const [selectedChantierId, setSelectedChantierId] = useState<string>('none')
+  const [isAutoliquidation, setIsAutoliquidation] = useState(false)
+  const [vatRates, setVatRates] = useState<VatRateDetail[]>([])
 
-  // ─── Charger le document ───────────────────────────────────
   const fetchDocument = useCallback(async () => {
     if (!user || !documentId) return
-
     setLoading(true)
     setError(null)
 
     try {
-      const { data: profile, error: profileError } = await supabase
-        .from('profiles')
-        .select('organization_id')
-        .eq('id', user.id)
-        .single()
-
-      if (profileError) throw profileError
-      if (!profile?.organization_id) {
-        throw new Error('Aucune entreprise associée à votre compte')
-      }
-
       const { data, error: docError } = await supabase
         .from('documents')
         .select('*')
         .eq('id', documentId)
-        .eq('organization_id', profile.organization_id)
         .single()
 
       if (docError) throw docError
-      if (!data) throw new Error('Document introuvable')
+      setDoc(data)
 
-      const document = data as DocumentDetail
-      setDoc(document)
+      const ext = data.extracted_data || {}
+      setThirdParty(ext.third_party_name || data.file_name || '')
+      setInvoiceNumber(ext.invoice_number || '')
+      setTransactionDate(toInputDateString(ext.transaction_date || data.created_at))
 
-      // Préremplir le formulaire
-      const extracted = document.extracted_data || {}
-      setThirdParty(extracted.third_party_name || '')
-      setInvoiceNumber(extracted.invoice_number || '')
-      setTransactionDate(toInputDate(extracted.transaction_date))
-      setAmountHt(extracted.amount_ht != null ? String(extracted.amount_ht) : '')
-      setVatAmount(extracted.vat_amount != null ? String(extracted.vat_amount) : '')
-      setAmountTtc(extracted.amount_ttc != null ? String(extracted.amount_ttc) : '')
-      setDocumentType(
-        (document.document_type || extracted.document_type || '') as DocumentType | ''
-      )
-      setCategory(extracted.category || '')
-      setPaymentStatus(extracted.payment_status || 'unknown')
+      const rawTtc = ext.amount_ttc ?? 0
+      const rawHt = ext.amount_ht ?? (rawTtc ? rawTtc / 1.2 : 0)
+      const rawVat = ext.vat_amount ?? (rawTtc ? rawTtc - rawHt : 0)
+
+      setAmountHt(rawHt ? rawHt.toFixed(2) : '')
+      setVatAmount(rawVat ? rawVat.toFixed(2) : '')
+      setAmountTtc(rawTtc ? rawTtc.toFixed(2) : '')
+
+      setDocumentType(data.document_type || ext.document_type || 'supplier_invoice')
+      setCategory(ext.category || 'Matières premières BTP')
+      setPaymentStatus(ext.payment_status || 'paid')
+      setSelectedChantierId(data.chantier_id || 'none')
+      setIsAutoliquidation(Boolean(ext.is_autoliquidation))
+      setVatRates(Array.isArray(ext.vat_rates) ? ext.vat_rates : [])
+
+      const { data: chData } = await supabase
+        .from('chantiers')
+        .select('id, name')
+        .order('created_at', { ascending: false })
+
+      if (chData) setChantiersList(chData)
     } catch (err: unknown) {
       console.error(err)
       setError(err instanceof Error ? err.message : 'Impossible de charger le document')
@@ -208,126 +186,94 @@ export default function DocumentDetailPage() {
     fetchDocument()
   }, [fetchDocument])
 
-  // ─── Recalcul TTC si HT + TVA ──────────────────────────────
-  function handleHtChange(value: string) {
-    setAmountHt(value)
-    const ht = parseFloat(value.replace(',', '.'))
-    const tva = parseFloat(vatAmount.replace(',', '.'))
-    if (!Number.isNaN(ht) && !Number.isNaN(tva)) {
-      setAmountTtc((ht + tva).toFixed(2))
+  const handleTtcChange = (val: string) => {
+    setAmountTtc(val)
+    const ttc = parseFloat(val.replace(',', '.'))
+    if (!isNaN(ttc) && ttc > 0) {
+      if (isAutoliquidation) {
+        setAmountHt(ttc.toFixed(2))
+        setVatAmount('0.00')
+      } else {
+        const ht = Math.round((ttc / 1.2) * 100) / 100
+        const vat = Math.round((ttc - ht) * 100) / 100
+        setAmountHt(ht.toFixed(2))
+        setVatAmount(vat.toFixed(2))
+      }
     }
   }
 
-  function handleVatChange(value: string) {
-    setVatAmount(value)
-    const ht = parseFloat(amountHt.replace(',', '.'))
-    const tva = parseFloat(value.replace(',', '.'))
-    if (!Number.isNaN(ht) && !Number.isNaN(tva)) {
-      setAmountTtc((ht + tva).toFixed(2))
-    }
-  }
-
-  // ─── Sauvegarder / Valider ─────────────────────────────────
-  async function handleSave(validate = false) {
+  const handleSave = async (validate = false) => {
     if (!doc) return
-
     setSaving(true)
     setError(null)
     setSuccess(null)
 
     try {
-      const parsedHt = amountHt ? parseFloat(amountHt.replace(',', '.')) : null
-      const parsedVat = vatAmount ? parseFloat(vatAmount.replace(',', '.')) : null
-      const parsedTtc = amountTtc ? parseFloat(amountTtc.replace(',', '.')) : null
+      const parsedHt = amountHt ? parseFloat(amountHt.replace(',', '.')) : 0
+      const parsedVat = isAutoliquidation ? 0 : (vatAmount ? parseFloat(vatAmount.replace(',', '.')) : 0)
+      const parsedTtc = isAutoliquidation ? parsedHt : (amountTtc ? parseFloat(amountTtc.replace(',', '.')) : parsedHt + parsedVat)
 
       const extracted_data: ExtractedData = {
         ...(doc.extracted_data || {}),
-        document_type: (documentType || null) as DocumentType | null,
+        document_type: documentType,
         third_party_name: thirdParty || null,
         invoice_number: invoiceNumber || null,
         transaction_date: transactionDate || null,
-        amount_ht: Number.isNaN(parsedHt as number) ? null : parsedHt,
-        vat_amount: Number.isNaN(parsedVat as number) ? null : parsedVat,
-        amount_ttc: Number.isNaN(parsedTtc as number) ? null : parsedTtc,
-        category: category || null,
+        amount_ht: parsedHt,
+        vat_amount: parsedVat,
+        amount_ttc: parsedTtc,
+        category: category || 'Matières premières BTP',
         payment_status: paymentStatus,
-        needs_review: !validate,
+        is_autoliquidation: isAutoliquidation,
+        vat_rates: vatRates,
       }
 
-      const newStatus: DocumentStatus = validate ? 'validated' : doc.status === 'uploaded' ? 'analyzed' : doc.status
-
-      const { error: updateError } = await supabase
-        .from('documents')
-        .update({
+      const res = await fetch('/api/documents/validate', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          documentId: doc.id,
+          validate,
           extracted_data,
-          document_type: documentType || null,
-          status: newStatus,
-          confidence_score: doc.confidence_score,
-        })
-        .eq('id', doc.id)
-
-      if (updateError) throw updateError
-
-      // Si validé, créer/mettre à jour une transaction liée
-      if (validate && parsedTtc != null) {
-        const transactionType =
-          documentType === 'customer_invoice' || documentType === 'quote'
-            ? 'income'
-            : documentType === 'receipt'
-              ? 'receipt'
-              : 'expense'
-
-        // Vérifier si une transaction existe déjà pour ce document
-        const { data: existing } = await supabase
-          .from('transactions')
-          .select('id')
-          .eq('document_id', doc.id)
-          .maybeSingle()
-
-        const payload = {
-          organization_id: doc.organization_id,
-          document_id: doc.id,
-          transaction_type: transactionType,
+          document_type: documentType,
+          chantier_id: selectedChantierId === 'none' ? null : selectedChantierId,
           third_party_name: thirdParty || null,
-          category: category || null,
+          category: category || 'Matières premières BTP',
           invoice_number: invoiceNumber || null,
           transaction_date: transactionDate || null,
-          amount_ht: parsedHt ?? 0,
-          vat_amount: parsedVat ?? 0,
+          amount_ht: parsedHt,
+          vat_amount: parsedVat,
           amount_ttc: parsedTtc,
           payment_status: paymentStatus,
-          validation_status: 'validated',
-        }
+          confidence_score: doc.confidence_score,
+        }),
+      })
 
-        if (existing?.id) {
-          await supabase.from('transactions').update(payload).eq('id', existing.id)
-        } else {
-          await supabase.from('transactions').insert(payload)
-        }
+      const data = await res.json()
+      if (!res.ok) throw new Error(data.error || 'Erreur lors de la sauvegarde')
+
+      setSuccess(validate ? 'Document validé et écriture comptable enregistrée avec succès !' : 'Modifications enregistrées')
+      
+      if (validate) {
+        setTimeout(() => router.push('/documents'), 1200)
+      } else {
+        await fetchDocument()
       }
-
-      setSuccess(validate ? 'Document validé et transaction créée' : 'Modifications enregistrées')
-      await fetchDocument()
     } catch (err: unknown) {
-      console.error(err)
       setError(err instanceof Error ? err.message : 'Erreur lors de la sauvegarde')
     } finally {
       setSaving(false)
     }
   }
 
-  // ─── Relancer l'analyse IA ─────────────────────────────────
-  async function handleReanalyze() {
+  const handleReanalyze = async () => {
     if (!doc) return
     setAnalyzing(true)
     setError(null)
     setSuccess(null)
 
     try {
-      await supabase
-        .from('documents')
-        .update({ status: 'analyzing' })
-        .eq('id', doc.id)
+      await supabase.from('documents').update({ status: 'analyzing' }).eq('id', doc.id)
 
       const res = await fetch('/api/documents/analyze', {
         method: 'POST',
@@ -337,391 +283,264 @@ export default function DocumentDetailPage() {
 
       if (!res.ok) {
         const body = await res.json().catch(() => ({}))
-        throw new Error(body.error || 'Analyse IA indisponible pour le moment')
+        throw new Error(body.error || 'Erreur lors du relancement de l\'analyse IA')
       }
 
-      setSuccess('Analyse relancée')
+      setSuccess('Analyse IA relancée avec succès !')
       await fetchDocument()
     } catch (err: unknown) {
-      setError(err instanceof Error ? err.message : 'Erreur analyse IA')
-      // Remettre un statut lisible
+      setError(err instanceof Error ? err.message : 'Erreur lors du relancement IA')
       await supabase.from('documents').update({ status: 'uploaded' }).eq('id', doc.id)
-      await fetchDocument()
     } finally {
       setAnalyzing(false)
     }
   }
 
-  // ─── Supprimer ─────────────────────────────────────────────
-  async function handleDelete() {
-    if (!doc) return
-    const ok = window.confirm('Supprimer définitivement ce document ?')
-    if (!ok) return
-
+  const handleDelete = async () => {
+    if (!doc || !window.confirm('Voulez-vous vraiment supprimer définitivement ce document ?')) return
     setDeleting(true)
-    setError(null)
-
     try {
-      // Supprimer d'abord les transactions liées (si existantes)
       await supabase.from('transactions').delete().eq('document_id', doc.id)
-
-      const { error: deleteError } = await supabase
-        .from('documents')
-        .delete()
-        .eq('id', doc.id)
-
-      if (deleteError) throw deleteError
-
+      await supabase.from('documents').delete().eq('id', doc.id)
       router.push('/documents')
     } catch (err: unknown) {
-      setError(err instanceof Error ? err.message : 'Suppression impossible')
+      setError(err instanceof Error ? err.message : 'Erreur lors de la suppression')
       setDeleting(false)
     }
   }
 
-  // ─── États de chargement / erreur ──────────────────────────
   if (loading) {
     return (
-      <div className="flex items-center justify-center py-24">
-        <Loader2 className="h-8 w-8 animate-spin text-blue-600" />
-        <span className="ml-3 text-gray-500">Chargement du document…</span>
+      <div className="p-16 text-center space-y-3">
+        <Loader2 className="h-8 w-8 animate-spin text-amber-600 mx-auto" />
+        <p className="text-sm text-gray-500 font-medium">Chargement du document...</p>
       </div>
     )
   }
 
-  if (error && !doc) {
-    return (
-      <div className="max-w-lg mx-auto text-center py-16">
-        <AlertCircle className="h-12 w-12 text-red-500 mx-auto mb-4" />
-        <h2 className="text-xl font-semibold text-gray-900 mb-2">Document introuvable</h2>
-        <p className="text-gray-500 mb-6">{error}</p>
-        <Link href="/documents">
-          <Button variant="outline" className="gap-2">
-            <ArrowLeft className="h-4 w-4" />
-            Retour aux documents
-          </Button>
-        </Link>
-      </div>
-    )
-  }
-
-  if (!doc) return null
-
-  const status = statusConfig[doc.status]
-  const isImage = doc.file_type?.startsWith('image/') || /\.(jpe?g|png|webp|gif)$/i.test(doc.file_name)
+  const isDocValidated = doc?.status === 'validated'
+  const isPdf = doc?.file_type?.includes('pdf') || doc?.file_name?.toLowerCase().endsWith('.pdf')
+  
+  // 🛡️ URL PROXY SÉCURISÉE (Plus jamais de 'Bucket not found')
+  const proxyDownloadUrl = doc?.id ? `/api/documents/download?id=${doc.id}` : ''
 
   return (
-    <div className="max-w-5xl mx-auto">
-      {/* Header */}
-      <div className="mb-6">
-        <Link
-          href="/documents"
-          className="inline-flex items-center gap-2 text-sm text-gray-500 hover:text-gray-700 mb-4 transition-colors"
-        >
-          <ArrowLeft className="h-4 w-4" />
-          Retour aux documents
+    <div className="space-y-6 p-4 sm:p-6 max-w-6xl mx-auto">
+      <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 border-b border-gray-100 pb-4">
+        <Link href="/documents">
+          <Button variant="outline" size="sm" className="gap-2">
+            <ArrowLeft className="h-4 w-4" /> Retour aux documents
+          </Button>
         </Link>
+        <div className="flex items-center gap-2">
+          <Button
+            variant="outline"
+            size="sm"
+            onClick={handleReanalyze}
+            disabled={analyzing}
+            className="gap-2 border-amber-300 text-amber-900 hover:bg-amber-50"
+          >
+            <RefreshCw className={`h-4 w-4 ${analyzing ? 'animate-spin' : ''}`} />
+            Relancer l'IA
+          </Button>
 
-        <div className="flex flex-col lg:flex-row lg:items-start lg:justify-between gap-4">
-          <div className="min-w-0">
-            <div className="flex items-center gap-3 flex-wrap">
-              <h1 className="text-2xl lg:text-3xl font-bold text-gray-900 truncate">
-                {thirdParty || doc.file_name}
-              </h1>
-              <span className={`px-2.5 py-1 rounded-full text-xs font-medium ${status.className}`}>
-                {status.label}
-              </span>
-            </div>
-            <p className="text-sm text-gray-500 mt-1">
-              {doc.file_name} · Ajouté le {formatDate(doc.created_at)}
-            </p>
-          </div>
-
-          <div className="flex flex-wrap gap-2">
-            <Button
-              variant="outline"
-              size="sm"
-              className="gap-2"
-              onClick={handleReanalyze}
-              disabled={analyzing || saving}
-            >
-              {analyzing ? (
-                <Loader2 className="h-4 w-4 animate-spin" />
-              ) : (
-                <RefreshCw className="h-4 w-4" />
-              )}
-              Relancer l&apos;IA
-            </Button>
-
-            {doc.file_url && (
-              <a href={doc.file_url} target="_blank" rel="noopener noreferrer">
-                <Button variant="outline" size="sm" className="gap-2">
-                  <ExternalLink className="h-4 w-4" />
-                  Ouvrir le fichier
-                </Button>
-              </a>
-            )}
-
-            <Button
-              variant="outline"
-              size="sm"
-              className="gap-2 text-red-600 hover:text-red-700 hover:bg-red-50"
-              onClick={handleDelete}
-              disabled={deleting}
-            >
-              {deleting ? (
-                <Loader2 className="h-4 w-4 animate-spin" />
-              ) : (
-                <Trash2 className="h-4 w-4" />
-              )}
-              Supprimer
-            </Button>
-          </div>
+          <Button
+            variant="outline"
+            size="sm"
+            onClick={handleDelete}
+            disabled={deleting}
+            className="text-red-600 border-red-200 hover:bg-red-50 gap-2"
+          >
+            <Trash2 className="h-4 w-4" /> Supprimer
+          </Button>
         </div>
       </div>
 
-      {/* Messages */}
       {error && (
-        <div className="mb-4 bg-red-50 text-red-600 text-sm p-4 rounded-lg flex items-start gap-2">
-          <AlertCircle className="h-4 w-4 mt-0.5 flex-shrink-0" />
-          {error}
+        <div className="p-4 rounded-xl bg-red-50 border border-red-200 text-red-700 text-sm flex items-center gap-2">
+          <AlertCircle className="h-5 w-5 shrink-0" />
+          <span>{error}</span>
         </div>
       )}
+
       {success && (
-        <div className="mb-4 bg-green-50 text-green-700 text-sm p-4 rounded-lg flex items-start gap-2">
-          <CheckCircle2 className="h-4 w-4 mt-0.5 flex-shrink-0" />
-          {success}
+        <div className="p-4 rounded-xl bg-emerald-50 border border-emerald-200 text-emerald-700 text-sm flex items-center gap-2 font-medium">
+          <CheckCircle2 className="h-5 w-5 shrink-0 text-emerald-600" />
+          <span>{success}</span>
         </div>
       )}
 
-      <div className="grid grid-cols-1 lg:grid-cols-5 gap-6">
-        {/* Aperçu fichier */}
-        <div className="lg:col-span-2">
-          <div className="bg-white rounded-xl border border-gray-200 shadow-sm overflow-hidden sticky top-24">
-            <div className="px-4 py-3 border-b border-gray-100 flex items-center gap-2">
-              <FileText className="h-4 w-4 text-gray-500" />
-              <span className="text-sm font-medium text-gray-700">Aperçu</span>
-            </div>
-            <div className="p-4 bg-gray-50 min-h-[320px] flex items-center justify-center">
-              {isImage && doc.file_url ? (
-                // eslint-disable-next-line @next/next/no-img-element
-                <img
-                  src={doc.file_url}
-                  alt={doc.file_name}
-                  className="max-w-full max-h-[480px] rounded-lg shadow object-contain"
-                />
-              ) : doc.file_url ? (
-                <div className="text-center p-6">
-                  <FileText className="h-16 w-16 text-gray-300 mx-auto mb-4" />
-                  <p className="text-sm text-gray-600 mb-4 break-all">{doc.file_name}</p>
-                  <a href={doc.file_url} target="_blank" rel="noopener noreferrer">
-                    <Button variant="outline" size="sm" className="gap-2">
-                      <ExternalLink className="h-4 w-4" />
-                      Voir le PDF / fichier
-                    </Button>
-                  </a>
-                </div>
+      <div className="grid grid-cols-1 lg:grid-cols-12 gap-6">
+        {/* Colonne Aperçu Fichier (Chargé via Proxy Côté Serveur) */}
+        <div className="lg:col-span-5 bg-white p-4 rounded-2xl border border-gray-200 space-y-4 shadow-sm">
+          <h3 className="font-bold text-gray-900 text-sm flex items-center gap-2">
+            <FileText className="h-4 w-4 text-amber-600" /> Aperçu de la pièce
+          </h3>
+          <div className="aspect-[3/4] bg-gray-50 rounded-xl border border-gray-200 overflow-hidden relative flex items-center justify-center">
+            {proxyDownloadUrl ? (
+              isPdf ? (
+                <iframe src={proxyDownloadUrl} className="w-full h-full border-none" title="Aperçu PDF" />
               ) : (
-                <p className="text-sm text-gray-400">Aperçu indisponible</p>
-              )}
-            </div>
+                <img src={proxyDownloadUrl} alt={doc?.file_name} className="object-contain w-full h-full" />
+              )
+            ) : (
+              <span className="text-gray-400 text-xs">Aperçu indisponible</span>
+            )}
           </div>
+          <a href={proxyDownloadUrl} target="_blank" rel="noopener noreferrer" className="block">
+            <Button variant="outline" size="sm" className="w-full gap-2 text-xs font-medium">
+              <ExternalLink className="h-3.5 w-3.5" /> Ouvrir le document original
+            </Button>
+          </a>
         </div>
 
-        {/* Formulaire données extraites */}
-        <div className="lg:col-span-3">
-          <div className="bg-white rounded-xl border border-gray-200 shadow-sm">
-            <div className="px-6 py-4 border-b border-gray-100">
-              <h2 className="text-lg font-semibold text-gray-900">
-                Données extraites
-              </h2>
-              <p className="text-sm text-gray-500 mt-1">
-                Vérifiez et corrigez les informations avant de valider
-              </p>
+        {/* Formulaire de Validation */}
+        <div className="lg:col-span-7 bg-white p-6 rounded-2xl border border-gray-200 space-y-6 shadow-sm">
+          <div className="flex items-center justify-between border-b pb-4">
+            <h2 className="text-lg font-bold text-gray-900">Données comptables extraites</h2>
+            <span className={isDocValidated ? 'px-3 py-1 rounded-full text-xs font-bold bg-emerald-50 text-emerald-700 border border-emerald-200' : 'px-3 py-1 rounded-full text-xs font-bold bg-amber-50 text-amber-700 border border-amber-200'}>
+              {isDocValidated ? 'Validé' : 'À vérifier / Valider'}
+            </span>
+          </div>
+
+          <div className="space-y-4 text-sm">
+            <div className="p-4 bg-amber-50/60 rounded-xl border border-amber-100 space-y-2">
+              <Label htmlFor="chantier" className="flex items-center gap-2 font-bold text-amber-900 text-xs uppercase tracking-wider">
+                <HardHat className="h-4 w-4 text-amber-600" /> Chantier rattaché (Suivi de rentabilité)
+              </Label>
+              <Select value={selectedChantierId} onValueChange={setSelectedChantierId}>
+                <SelectTrigger id="chantier" className="bg-white">
+                  <SelectValue placeholder="Sélectionner un chantier..." />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="none">Aucun chantier particulier</SelectItem>
+                  {chantiersList.map((ch) => (
+                    <SelectItem key={ch.id} value={ch.id}>
+                      {ch.name}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
             </div>
 
-            <div className="p-6 space-y-5">
-              {/* Type + paiement */}
-              <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-                <div className="space-y-2">
-                  <Label>Type de document</Label>
-                  <Select
-                    value={documentType}
-                    onValueChange={(v) => setDocumentType(v as DocumentType)}
-                  >
-                    <SelectTrigger>
-                      <SelectValue placeholder="Sélectionner…" />
-                    </SelectTrigger>
-                    <SelectContent>
-                      {DOCUMENT_TYPES.map((t) => (
-                        <SelectItem key={t.value} value={t.value}>
-                          {t.label}
-                        </SelectItem>
-                      ))}
-                    </SelectContent>
-                  </Select>
-                </div>
-
-                <div className="space-y-2">
-                  <Label>Statut de paiement</Label>
-                  <Select
-                    value={paymentStatus}
-                    onValueChange={(v) =>
-                      setPaymentStatus(v as 'paid' | 'unpaid' | 'unknown')
-                    }
-                  >
-                    <SelectTrigger>
-                      <SelectValue />
-                    </SelectTrigger>
-                    <SelectContent>
-                      {PAYMENT_STATUSES.map((p) => (
-                        <SelectItem key={p.value} value={p.value}>
-                          {p.label}
-                        </SelectItem>
-                      ))}
-                    </SelectContent>
-                  </Select>
-                </div>
-              </div>
-
-              {/* Tiers + n° facture */}
-              <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-                <div className="space-y-2">
-                  <Label htmlFor="thirdParty">Fournisseur / Client</Label>
-                  <Input
-                    id="thirdParty"
-                    value={thirdParty}
-                    onChange={(e) => setThirdParty(e.target.value)}
-                    placeholder="ex: Leroy Merlin"
-                  />
-                </div>
-                <div className="space-y-2">
-                  <Label htmlFor="invoiceNumber">N° de facture</Label>
-                  <Input
-                    id="invoiceNumber"
-                    value={invoiceNumber}
-                    onChange={(e) => setInvoiceNumber(e.target.value)}
-                    placeholder="ex: FA-2025-001"
-                  />
-                </div>
-              </div>
-
-              {/* Date + catégorie */}
-              <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-                <div className="space-y-2">
-                  <Label htmlFor="date">Date de la transaction</Label>
-                  <Input
-                    id="date"
-                    type="date"
-                    value={transactionDate}
-                    onChange={(e) => setTransactionDate(e.target.value)}
-                  />
-                </div>
-                <div className="space-y-2">
-                  <Label>Catégorie comptable</Label>
-                  <Select value={category} onValueChange={setCategory}>
-                    <SelectTrigger>
-                      <SelectValue placeholder="Sélectionner…" />
-                    </SelectTrigger>
-                    <SelectContent>
-                      {CATEGORIES.map((c) => (
-                        <SelectItem key={c} value={c}>
-                          {c}
-                        </SelectItem>
-                      ))}
-                    </SelectContent>
-                  </Select>
-                </div>
-              </div>
-
-              {/* Montants */}
-              <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
-                <div className="space-y-2">
-                  <Label htmlFor="ht">Montant HT (€)</Label>
-                  <Input
-                    id="ht"
-                    inputMode="decimal"
-                    value={amountHt}
-                    onChange={(e) => handleHtChange(e.target.value)}
-                    placeholder="0,00"
-                  />
-                </div>
-                <div className="space-y-2">
-                  <Label htmlFor="tva">TVA (€)</Label>
-                  <Input
-                    id="tva"
-                    inputMode="decimal"
-                    value={vatAmount}
-                    onChange={(e) => handleVatChange(e.target.value)}
-                    placeholder="0,00"
-                  />
-                </div>
-                <div className="space-y-2">
-                  <Label htmlFor="ttc">Montant TTC (€)</Label>
-                  <Input
-                    id="ttc"
-                    inputMode="decimal"
-                    value={amountTtc}
-                    onChange={(e) => setAmountTtc(e.target.value)}
-                    placeholder="0,00"
-                    className="font-semibold"
-                  />
-                </div>
-              </div>
-
-              {/* Récap montants */}
-              <div className="bg-gray-50 rounded-lg p-4 flex flex-wrap gap-6 text-sm">
+            <div className="p-3 bg-slate-50 rounded-xl border border-slate-200 flex items-center justify-between">
+              <div className="flex items-center gap-2">
+                <ShieldAlert className="h-4 w-4 text-blue-600" />
                 <div>
-                  <p className="text-gray-500">HT</p>
-                  <p className="font-semibold text-gray-900">
-                    {formatCurrency(parseFloat(amountHt.replace(',', '.')) || null)}
-                  </p>
+                  <p className="font-semibold text-xs text-gray-900">Autoliquidation de la TVA (Sous-traitance BTP)</p>
+                  <p className="text-[11px] text-gray-500">Mention Art. 283-2 nonies du CGI (TVA à 0 €)</p>
                 </div>
-                <div>
-                  <p className="text-gray-500">TVA</p>
-                  <p className="font-semibold text-gray-900">
-                    {formatCurrency(parseFloat(vatAmount.replace(',', '.')) || null)}
-                  </p>
-                </div>
-                <div>
-                  <p className="text-gray-500">TTC</p>
-                  <p className="font-semibold text-blue-600 text-lg">
-                    {formatCurrency(parseFloat(amountTtc.replace(',', '.')) || null)}
-                  </p>
-                </div>
+              </div>
+              <input
+                type="checkbox"
+                checked={isAutoliquidation}
+                onChange={(e) => {
+                  const checked = e.target.checked
+                  setIsAutoliquidation(checked)
+                  if (checked) {
+                    setVatAmount('0.00')
+                  }
+                }}
+                className="h-4 w-4 text-amber-600 rounded border-gray-300 focus:ring-amber-500 cursor-pointer"
+              />
+            </div>
+
+            <div className="grid grid-cols-2 gap-4">
+              <div className="space-y-1.5">
+                <Label>Type de document</Label>
+                <Select value={documentType} onValueChange={(val: DocumentType) => setDocumentType(val)}>
+                  <SelectTrigger className="bg-gray-50/50"><SelectValue /></SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="supplier_invoice">Facture Fournisseur</SelectItem>
+                    <SelectItem value="customer_invoice">Facture Client</SelectItem>
+                    <SelectItem value="receipt">Ticket de caisse / Reçu</SelectItem>
+                    <SelectItem value="quote">Devis</SelectItem>
+                  </SelectContent>
+                </Select>
+              </div>
+
+              <div className="space-y-1.5">
+                <Label>Fournisseur / Tiers</Label>
+                <Input value={thirdParty} onChange={(e) => setThirdParty(e.target.value)} placeholder="ex: LEROY MERLIN" className="bg-gray-50/50 font-medium" />
               </div>
             </div>
 
-            {/* Actions */}
-            <div className="px-6 py-4 border-t border-gray-100 flex flex-col sm:flex-row gap-3 sm:justify-end bg-gray-50/50">
-              <Button
-                variant="outline"
-                onClick={() => handleSave(false)}
-                disabled={saving || analyzing}
-                className="gap-2"
-              >
-                {saving ? <Loader2 className="h-4 w-4 animate-spin" /> : <Save className="h-4 w-4" />}
-                Enregistrer
+            <div className="grid grid-cols-2 gap-4">
+              <div className="space-y-1.5">
+                <Label>N° de pièce / Facture</Label>
+                <Input value={invoiceNumber} onChange={(e) => setInvoiceNumber(e.target.value)} placeholder="ex: 849201-04" className="bg-gray-50/50 font-mono" />
+              </div>
+
+              <div className="space-y-1.5">
+                <Label>Date de transaction</Label>
+                <Input type="date" value={transactionDate} onChange={(e) => setTransactionDate(e.target.value)} className="bg-gray-50/50" />
+              </div>
+            </div>
+
+            <div className="space-y-1.5">
+              <Label className="flex items-center gap-1.5 text-xs text-gray-700 font-semibold">
+                <Tag className="h-3.5 w-3.5 text-amber-600" /> Catégorie Plan Comptable BTP
+              </Label>
+              <Select value={category} onValueChange={setCategory}>
+                <SelectTrigger className="bg-gray-50/50"><SelectValue /></SelectTrigger>
+                <SelectContent>
+                  {CATEGORIES.map((cat) => (
+                    <SelectItem key={cat.value} value={cat.value}>{cat.label}</SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+            </div>
+
+            <div className="grid grid-cols-3 gap-3 pt-2">
+              <div className="space-y-1">
+                <Label>Montant HT (€)</Label>
+                <Input type="number" step="0.01" value={amountHt} onChange={(e) => setAmountHt(e.target.value)} className="font-mono" />
+              </div>
+              <div className="space-y-1">
+                <Label>TVA (€)</Label>
+                <Input
+                  type="number"
+                  step="0.01"
+                  value={isAutoliquidation ? '0.00' : vatAmount}
+                  disabled={isAutoliquidation}
+                  onChange={(e) => setVatAmount(e.target.value)}
+                  className="font-mono"
+                />
+              </div>
+              <div className="space-y-1">
+                <Label>Montant TTC (€)</Label>
+                <Input type="number" step="0.01" value={amountTtc} onChange={(e) => handleTtcChange(e.target.value)} className="font-mono font-bold" />
+              </div>
+            </div>
+
+            {vatRates.length > 0 && !isAutoliquidation && (
+              <div className="p-3 bg-gray-50 rounded-xl border border-gray-200 space-y-2 text-xs">
+                <p className="font-semibold text-gray-700 flex items-center gap-1">
+                  <Percent className="h-3.5 w-3.5 text-amber-600" /> Décomposition TVA extraite :
+                </p>
+                <div className="grid grid-cols-3 gap-2 text-gray-600 font-medium border-t pt-2">
+                  {vatRates.map((vr, idx) => (
+                    <div key={idx} className="bg-white p-2 rounded border text-center">
+                      <p className="font-bold text-gray-900">{vr.rate}%</p>
+                      <p className="text-[10px] text-gray-500">Base HT: {formatCurrency(vr.base_ht)}</p>
+                      <p className="text-[10px] text-amber-600 font-bold">TVA: {formatCurrency(vr.vat_amount)}</p>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            )}
+
+            <div className="flex items-center justify-end gap-3 pt-4 border-t">
+              <Button type="button" variant="outline" onClick={() => handleSave(false)} disabled={saving}>
+                Enregistrer les modifications
               </Button>
-              <Button
-                onClick={() => handleSave(true)}
-                disabled={saving || analyzing}
-                className="gap-2"
-              >
-                {saving ? (
-                  <Loader2 className="h-4 w-4 animate-spin" />
-                ) : (
-                  <CheckCircle2 className="h-4 w-4" />
-                )}
-                Valider & créer la transaction
+
+              <Button type="button" onClick={() => handleSave(true)} disabled={saving} className="bg-amber-600 hover:bg-amber-700 text-white gap-2 font-bold shadow-md">
+                {saving ? <Loader2 className="h-4 w-4 animate-spin" /> : <Save className="h-4 w-4" />}
+                Valider & Enregistrer l'écriture
               </Button>
             </div>
           </div>
-
-          <p className="text-xs text-gray-400 mt-3 px-1">
-            Astuce : “Valider” enregistre les données et crée (ou met à jour) une ligne dans
-            Transactions pour l’export comptable.
-          </p>
         </div>
       </div>
     </div>

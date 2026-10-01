@@ -17,7 +17,7 @@ export const signupSchema = z.object({
     .regex(/[A-Z]/, 'Doit contenir au moins une majuscule')
     .regex(/[a-z]/, 'Doit contenir au moins une minuscule')
     .regex(/[0-9]/, 'Doit contenir au moins un chiffre')
-    .regex(/[^A-Za-z0-9]/, 'Doit contenir au moins un caractère spécial'),
+    .regex(/[^A-Za-z0-9]/, 'Doit contenir au moins un caractère special'),
   fullName: z.string().min(2, 'Nom trop court').max(100).trim(),
   termsAccepted: z.boolean().refine((val) => val === true, {
     message: 'Vous devez accepter les CGU'
@@ -29,14 +29,14 @@ export const onboardingSchema = z.object({
   businessName: z.string().min(2).max(200).trim(),
   businessType: z.enum(['auto_entrepreneur', 'eurl', 'sarl', 'sas', 'sasu', 'sci', 'association', 'autre']),
   siret: z.string().regex(/^\d{14}$/, 'SIRET invalide (14 chiffres)').optional(),
-  tvaNumber: z.string().regex(/^FR\d{11}$/, 'Numéro TVA invalide (FR + 11 chiffres)').optional(),
+  tvaNumber: z.string().regex(/^FR\d{11}$/, 'Numero TVA invalide (FR + 11 chiffres)').optional(),
   address: z.object({
     street: z.string().min(5).max(200),
     city: z.string().min(2).max(100),
     postalCode: z.string().regex(/^\d{5}$/, 'Code postal invalide'),
     country: z.string().default('France'),
   }),
-  phone: z.string().regex(/^(\+33|0)[1-9](\d{8})$/, 'Numéro français invalide').optional(),
+  phone: z.string().regex(/^(\+33|0)[1-9](\d{8})$/, 'Numero français invalide').optional(),
 })
 
 // ----- Documents (factures, tickets, reçus) -----
@@ -98,7 +98,7 @@ export type ValidationResult<T> =
   | { success: false; errors: Record<string, string[]> }
 
 /**
- * Valide et sanitise les données entrantes
+ * Valide et sanitise les donnees entrantes
  */
 export function validateRequest<T extends z.ZodTypeAny>(
   schema: T,
@@ -126,12 +126,12 @@ export function validateRequest<T extends z.ZodTypeAny>(
 }
 
 /**
- * Helper pour réponse d'erreur standardisée
+ * Helper pour reponse d'erreur standardisee
  */
 export function validationErrorResponse(errors: Record<string, string[]>) {
   return new Response(
     JSON.stringify({
-      error: 'Validation échouée',
+      error: 'Validation echouee',
       errors,
       code: 'VALIDATION_ERROR',
     }),
@@ -147,7 +147,7 @@ export function validationErrorResponse(errors: Record<string, string[]>) {
 // ============================================
 
 /**
- * Sanitize une chaîne pour prévenir XSS/injection
+ * Sanitize une chaîne pour prevenir XSS/injection
  */
 export function sanitizeString(input: string): string {
   return input
@@ -165,7 +165,7 @@ export function sanitizeString(input: string): string {
 }
 
 /**
- * Sanitize un objet récursivement
+ * Sanitize un objet recursivement
  */
 export function sanitizeObject<T extends Record<string, any>>(obj: T): T {
   const sanitized: Record<string, any> = {}

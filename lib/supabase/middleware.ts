@@ -1,7 +1,7 @@
 import { createServerClient } from '@supabase/ssr'
 import { NextResponse, type NextRequest } from 'next/server'
 
-// Routes publiques autorisées sans authentification
+// Routes publiques autorisees sans authentification
 const PUBLIC_ROUTES = [
   '/login',
   '/signup',
@@ -13,7 +13,7 @@ const PUBLIC_ROUTES = [
 
 // Middleware de gestion de session Supabase avec validation robuste
 export async function updateSession(request: NextRequest) {
-  // 🔒 Sécurité : Ne pas traiter les routes API (laisser au gestionnaire API)
+  //  Securite : Ne pas traiter les routes API (laisser au gestionnaire API)
   if (PUBLIC_ROUTES.some((route) => request.nextUrl.pathname.startsWith(route))) {
     return NextResponse.next()
   }
@@ -28,7 +28,7 @@ export async function updateSession(request: NextRequest) {
           return request.cookies.getAll()
         },
         setAll(cookiesToSet) {
-          // Fix critique : On modifie la réponse, pas la requête
+          // Fix critique : On modifie la reponse, pas la requête
           cookiesToSet.forEach(({ name, value, options }) => {
             request.cookies.set({
               name,
@@ -41,21 +41,21 @@ export async function updateSession(request: NextRequest) {
     }
   )
 
-  // Vérification utilisateur
+  // Verification utilisateur
   const {
     data: { user },
   } = await supabase.auth.getUser()
 
-  // 🔐 Redirection intelligente vers login si non authentifié
+  //  Redirection intelligente vers login si non authentifie
   if (!user) {
     const url = request.nextUrl.clone()
     url.pathname = '/login'
-    // 🔁 Conserver la destination initiale pour redirection post-login
+    //  Conserver la destination initiale pour redirection post-login
     url.searchParams.set('redirectTo', request.nextUrl.pathname)
     return NextResponse.redirect(url)
   }
 
-  // ✅ Utilisateur authentifié → continuer
+  // âœ… Utilisateur authentifie â†’ continuer
   return NextResponse.next({
     request: {
       // Passer les headers Supabase

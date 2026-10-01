@@ -27,7 +27,7 @@ export interface RateLimitResult {
 }
 
 /**
- * Vérifie si une requête est autorisée selon le rate limit
+ * Verifie si une requête est autorisee selon le rate limit
  */
 export function checkRateLimit(
   identifier: string,
@@ -38,7 +38,7 @@ export function checkRateLimit(
 
   let entry = rateLimitStore.get(identifier)
 
-  // Réinitialiser si la fenêtre a expiré
+  // Reinitialiser si la fenêtre a expire
   if (!entry || now > entry.resetAt) {
     entry = { count: 0, resetAt: now + limit.windowMs }
     rateLimitStore.set(identifier, entry)
@@ -58,7 +58,7 @@ export function checkRateLimit(
 }
 
 /**
- * Nettoie les entrées expirées du store (à appeler périodiquement)
+ * Nettoie les entrees expirees du store (a appeler periodiquement)
  */
 export function cleanupRateLimits(): number {
   const now = Date.now()

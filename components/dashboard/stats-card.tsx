@@ -20,8 +20,7 @@ interface StatsCardProps {
 }
 
 // ─── Icônes de tendance ──────────────────────────────────────
-function TrendUpIcon() {
-  return (
+function TrendUpIcon() {return(
     <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
       <polyline points="22 7 13.5 15.5 8.5 10.5 2 17" />
       <polyline points="16 7 22 7 22 13" />
@@ -29,8 +28,7 @@ function TrendUpIcon() {
   )
 }
 
-function TrendDownIcon() {
-  return (
+function TrendDownIcon() {return(
     <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
       <polyline points="22 17 13.5 8.5 8.5 13.5 2 7" />
       <polyline points="16 17 22 17 22 11" />
@@ -77,8 +75,7 @@ function useCountAnimation(target: number, duration: number = 1000): number {
 }
 
 // ─── Skeleton Loader ─────────────────────────────────────────
-function StatsCardSkeleton() {
-  return (
+function StatsCardSkeleton() {return(
     <div className="bg-white rounded-xl border border-gray-200 p-6 animate-pulse">
       <div className="flex items-center justify-between mb-4">
         <div className="h-4 w-24 bg-gray-200 rounded" />
@@ -104,8 +101,7 @@ export function StatsCard({
   const numericValue = typeof value === 'number' ? value : null
   const animatedValue = useCountAnimation(numericValue ?? 0)
 
-  if (loading) {
-    return <StatsCardSkeleton />
+  if (loading) {return <StatsCardSkeleton />
   }
 
   const trendColors: Record<TrendDirection, string> = {
