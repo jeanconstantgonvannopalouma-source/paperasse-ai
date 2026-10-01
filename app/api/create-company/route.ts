@@ -1,81 +1,67 @@
-import { NextRequest, NextResponse } from 'next/server';
-import { createClient } from '@supabase/supabase-js';
-
-// Create server client with service role key
-const supabase = createClient(
-  process.env.NEXT_PUBLIC_SUPABASE_URL!,
-  process.env.SUPABASE_SERVICE_ROLE_KEY!
-);
+﻿import { NextRequest, NextResponse } from 'next/server'
+import { createServerClient } from '@supabase/ssr'
+import { createClient as createServiceClient } from '@supabase/supabase-js'
 
 export async function POST(request: NextRequest) {
   try {
-    // Parse JSON body
-    const body = await request.json();
+    const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL
+    const serviceKey = process.env.SUPABASE_SERVICE_ROLE_KEY || process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY
 
-    // Extract company data
-    const { name, email, phone, address, ...extra } = body;
-
-    // Validate required fields
-    if (!name) {
-      return NextResponse.json(
-        { error: 'Company name is required' },
-        { status: 400 }
-      );
+    if (!supabaseUrl || !serviceKey) {
+      return NextResponse.json({ error: 'Configuration Supabase incomplète' }, { status: 500 })
     }
 
-    // Insert company into organizations table
-    const { data, error } = await supabase
+    const supabaseAuth = createServerClient(
+      supabaseUrl,
+      process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY || '',
+      {
+        cookies: {
+          getAll() { return request.cookies.getAll() },
+          setAll() {},
+        },
+      }
+    )
+
+    const { data: { user }, error: authError } = await supabaseAuth.auth.getUser()
+    if (authError || !user) {
+      return NextResponse.json({ error: 'Non authentifié' }, { status: 401 })
+    }
+
+    const supabaseAdmin = createServiceClient(supabaseUrl, serviceKey)
+    const body = await request.json().catch(() => ({}))
+
+    const { companyName, siret } = body
+    if (!companyName || typeof companyName !== 'string' || !companyName.trim()) {
+      return NextResponse.json({ error: 'Le nom de l\'entreprise est requis' }, { status: 400 })
+    }
+
+    // Création organisation
+    const { data: org, error: orgErr } = await supabaseAdmin
       .from('organizations')
       .insert({
-        name,
-        email,
-        phone,
-        address,
-        ...extra,
+        name: companyName.trim(),
+        siret: siret ? siret.trim() : null,
+        email: user.email,
       })
-      .select();
+      .select('id')
+      .single()
 
-    if (error) {
-      console.error('Error creating company:', error);
-      return NextResponse.json(
-        { error: error.message },
-        { status: 400 }
-      );
+    if (orgErr || !org) {
+      throw new Error(orgErr?.message || 'Erreur lors de la création de l\'organisation')
     }
 
-    return NextResponse.json(
-      { data: data[0] },
-      { status: 201 }
-    );
-  } catch (error: any) {
-    console.error('Unexpected error in create-company API:', error);
-    return NextResponse.json(
-      { error: 'Internal server error' },
-      { status: 500 }
-    );
-  }
-}
+    // Lien du profil
+    await supabaseAdmin
+      .from('profiles')
+      .upsert({
+        id: user.id,
+        organization_id: org.id,
+        email: user.email,
+      })
 
-// Optional: Add GET method for fetching companies
-export async function GET(request: NextRequest) {
-  try {
-    const { data, error } = await supabase
-      .from('organizations')
-      .select('*')
-      .order('created_at', { ascending: false });
-
-    if (error) {
-      return NextResponse.json(
-        { error: error.message },
-        { status: 400 }
-      );
-    }
-
-    return NextResponse.json({ data });
-  } catch (error: any) {
-    return NextResponse.json(
-      { error: 'Internal server error' },
-      { status: 500 }
-    );
+    return NextResponse.json({ success: true, organizationId: org.id })
+  } catch (error: unknown) {
+    console.error('[CREATE COMPANY ERR]', error)
+    return NextResponse.json({ error: error instanceof Error ? error.message : 'Erreur création entreprise' }, { status: 500 })
   }
 }
