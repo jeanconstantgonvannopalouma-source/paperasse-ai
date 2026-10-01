@@ -4,7 +4,7 @@ import { useState, useEffect } from 'react'
 import Link from 'next/link'
 import { usePathname, useRouter } from 'next/navigation'
 import { Sidebar } from './sidebar'
-import { Plus, Menu, X, Sparkles, Lock, ArrowRight, Loader2, ShieldAlert } from 'lucide-react'
+import { Plus, Menu, X, Sparkles, Lock, ArrowRight, Loader2, ShieldAlert, Clock } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { createClient } from '@/lib/supabase/client'
 
@@ -45,14 +45,12 @@ export function AppShell({ children }: { children: React.ReactNode }) {
           .maybeSingle()
 
         if (org) {
-          // Si l'abonnement est actif, on laisse passer
           if (org.subscription_status === 'active') {
             setIsLocked(false)
             setLoadingAccess(false)
             return
           }
 
-          // Sinon on calcule la période d'essai de 14 jours
           const createdDate = new Date(org.created_at)
           const now = new Date()
           const diffTime = now.getTime() - createdDate.getTime()
@@ -60,9 +58,9 @@ export function AppShell({ children }: { children: React.ReactNode }) {
           const remaining = 14 - diffDays
 
           if (remaining <= 0) {
-            setIsLocked(true) // Période d'essai terminée
+            setIsLocked(true)
           } else {
-            setDaysLeft(remaining) // Afficher le compte à rebours
+            setDaysLeft(remaining)
           }
         }
       } catch (err) {
@@ -77,7 +75,7 @@ export function AppShell({ children }: { children: React.ReactNode }) {
 
   return (
     <div className="min-h-screen bg-gray-50/50 flex flex-col md:flex-row relative">
-      {/* PAYWALL OVERLAY (VERROUILLAGE) */}
+      {/* PAYWALL OVERLAY */}
       {isLocked && (
         <div className="fixed inset-0 z-[100] bg-slate-900/80 backdrop-blur-md flex items-center justify-center p-4 animate-in fade-in duration-300">
           <div className="bg-white rounded-3xl max-w-lg w-full p-8 sm:p-12 text-center space-y-6 shadow-2xl border border-gray-200">
@@ -165,7 +163,6 @@ export function AppShell({ children }: { children: React.ReactNode }) {
           </div>
 
           <div className="flex items-center gap-4">
-            {/* Compte à rebours Essai Gratuit */}
             {daysLeft !== null && daysLeft <= 14 && daysLeft > 0 && !isLocked && (
               <div className="hidden lg:flex items-center gap-2 text-xs font-semibold px-3 py-1.5 bg-amber-50 text-amber-700 border border-amber-200 rounded-full">
                 <Clock className="h-3.5 w-3.5" />
