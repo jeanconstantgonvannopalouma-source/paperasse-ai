@@ -23,9 +23,11 @@ Réponds UNIQUEMENT avec un JSON valide (sans markdown) :
 }`
 
 function getGeminiKey(): string {
-  const key = process.env.GEMINI_API_KEY || process.env.OPENAI_API_KEY
-  if (!key) throw new Error('GEMINI_API_KEY manquante dans .env.local')
-  return key
+  const key = process.env.GEMINI_API_KEY || process.env.GOOGLE_API_KEY || process.env.OPENAI_API_KEY
+  if (!key) {
+    throw new Error("Clé API Gemini manquante. Veuillez ajouter GEMINI_API_KEY dans les variables d'environnement Vercel.")
+  }
+  return key.trim()
 }
 
 function safeJsonParse(content: string): any {
@@ -47,10 +49,10 @@ function normalizeExtracted(data: any): ExtractedData {
   }
 
   const allowedTypes = new Set(['supplier_invoice', 'customer_invoice', 'receipt', 'quote', 'other'])
-  const score = typeof data?.confidence_score === 'number' ? data.confidence_score : 0.5
+  const score = typeof data?.confidence_score === 'number' ? data.confidence_score : 0.85
 
   return {
-    document_type: allowedTypes.has(data?.document_type) ? data.document_type : 'other',
+    document_type: allowedTypes.has(data?.document_type) ? data.document_type : 'supplier_invoice',
     third_party_name: data?.third_party_name || null,
     invoice_number: data?.invoice_number || null,
     transaction_date: data?.transaction_date || null,
@@ -60,7 +62,7 @@ function normalizeExtracted(data: any): ExtractedData {
     vat_rates: Array.isArray(data?.vat_rates) ? data.vat_rates : [],
     is_autoliquidation: Boolean(data?.is_autoliquidation),
     payment_method: data?.payment_method || 'unknown',
-    category: data?.category || null,
+    category: data?.category || 'Matières premières BTP',
     chantier_hint: data?.chantier_hint || null,
     confidence_score: score,
     needs_review: typeof data?.needs_review === 'boolean' ? data.needs_review : score < 0.75,
@@ -74,9 +76,8 @@ async function optimizeImageBuffer(buffer: Buffer, mimeType: string): Promise<{ 
     const optimized = await sharp(buffer)
       .rotate()
       .resize({ width: 1280, height: 1280, fit: 'inside', withoutEnlargement: true })
-      .jpeg({ quality: 75 })
+      .jpeg({ quality: 80 })
       .toBuffer()
-    console.log(`[OPTIMIZER] Image ${(buffer.length / 1024).toFixed(0)}KB -> ${(optimized.length / 1024).toFixed(0)}KB`)
     return { buffer: optimized, mimeType: 'image/jpeg' }
   } catch (err) {
     return { buffer, mimeType }
@@ -117,7 +118,7 @@ async function callGemini(apiKey: string, model: string, prompt: string, base64:
     throw err
   }
   const text = json?.candidates?.[0]?.content?.parts?.map((p: any) => p.text).join('')
-  if (!text) throw new Error('Réponse vide')
+  if (!text) throw new Error('Réponse vide de Gemini')
   return text
 }
 
@@ -126,7 +127,7 @@ export async function extractDocumentFromBuffer(rawBuffer: Buffer, rawMimeType: 
   const { buffer, mimeType } = await optimizeImageBuffer(rawBuffer, rawMimeType)
   const base64 = buffer.toString('base64')
   const cleanMime = mimeType.split(';')[0].trim() || 'image/jpeg'
-  const prompt = `${SYSTEM_PROMPT}\n\nDocument: ${fileName || 'document'}`
+  const prompt = `${SYSTEM_PROMPT}\n\nDocument à analyser: ${fileName || 'document.jpg'}`
 
   let models = ['gemini-1.5-flash', 'gemini-2.0-flash', 'gemini-1.5-pro']
   const detected = await listWorkingModels(apiKey)
@@ -138,25 +139,21 @@ export async function extractDocumentFromBuffer(rawBuffer: Buffer, rawMimeType: 
   let lastError: any = null
   for (const model of models.slice(0, 5)) {
     try {
-      console.log(`[AI-NATIVE] Analyse avec modèle Google: ${model}`)
+      console.log(`[GEMINI-AI] Analyse avec le modèle: ${model}`)
       const rawResponse = await callGemini(apiKey, model, prompt, base64, cleanMime)
       const parsed = safeJsonParse(rawResponse)
       const normalized = normalizeExtracted(parsed)
-      console.log(`[AI-SUCCESS] Succès avec ${model} -> Fournisseur: ${normalized.third_party_name}, Total TTC: ${normalized.amount_ttc}€`)
+      console.log(`[GEMINI-SUCCESS] Extraction réussie (${model}) -> Tiers: ${normalized.third_party_name}, TTC: ${normalized.amount_ttc}€`)
       return normalized
     } catch (err: any) {
       lastError = err
-      console.warn(`[AI-RETRY] Modèle ${model} indisponible: ${err.message}`)
+      console.warn(`[GEMINI-RETRY] Modèle ${model} échoué: ${err.message}`)
     }
   }
-  throw new Error(`Analyse IA impossible: ${lastError?.message || 'Erreur réseau'}`)
+  throw new Error(`Analyse Gemini impossible: ${lastError?.message || 'Erreur réseau'}`)
 }
 
-// Fonction wrapper pour la rétro-compatibilité
-export async function extractDocumentFromUrl(
-  fileUrl: string,
-  fileName?: string
-): Promise<ExtractedData> {
+export async function extractDocumentFromUrl(fileUrl: string, fileName?: string): Promise<ExtractedData> {
   let absoluteUrl = fileUrl
   if (fileUrl.startsWith('/')) {
     const baseUrl = process.env.NEXT_PUBLIC_APP_URL || 'http://localhost:3000'
@@ -164,9 +161,7 @@ export async function extractDocumentFromUrl(
   }
 
   const res = await fetch(absoluteUrl)
-  if (!res.ok) {
-    throw new Error(`Impossible de télécharger le fichier (${res.status} ${res.statusText})`)
-  }
+  if (!res.ok) throw new Error(`Échec du téléchargement fichier (${res.status})`)
 
   const arrayBuffer = await res.arrayBuffer()
   const buffer = Buffer.from(arrayBuffer)
