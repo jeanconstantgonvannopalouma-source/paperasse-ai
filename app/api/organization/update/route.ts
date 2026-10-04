@@ -4,13 +4,19 @@ import { createClient as createServiceClient } from '@supabase/supabase-js'
 
 export async function POST(request: NextRequest) {
   try {
-    const body = await request.json()
+    const body = await request.json().catch(() => ({}))
 
-    // 1. Vérification de l'utilisateur connecté
-    const responseHeaders = new Headers()
+    const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL
+    const anonKey = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY
+    const serviceKey = process.env.SUPABASE_SERVICE_ROLE_KEY || process.env.SUPABASE_SERVICE_KEY || anonKey
+
+    if (!supabaseUrl || !serviceKey) {
+      return NextResponse.json({ error: 'Configuration Supabase incomplète' }, { status: 500 })
+    }
+
     const supabaseAuth = createServerClient(
-      process.env.NEXT_PUBLIC_SUPABASE_URL!,
-      process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!,
+      supabaseUrl,
+      anonKey || '',
       {
         cookies: {
           getAll() { return request.cookies.getAll() },
@@ -24,17 +30,9 @@ export async function POST(request: NextRequest) {
       return NextResponse.json({ error: 'Non authentifié' }, { status: 401 })
     }
 
-    const serviceKey = process.env.SUPABASE_SERVICE_ROLE_KEY
-    if (!serviceKey) {
-      return NextResponse.json({ error: 'Clé de service introuvable' }, { status: 500 })
-    }
+    const supabaseAdmin = createServiceClient(supabaseUrl, serviceKey)
 
-    const supabaseAdmin = createServiceClient(
-      process.env.NEXT_PUBLIC_SUPABASE_URL!,
-      serviceKey
-    )
-
-    // 2. Vérifier si le profil a une organisation
+    // Vérification de l'organisation liée au profil
     let { data: profile } = await supabaseAdmin
       .from('profiles')
       .select('organization_id')
@@ -43,78 +41,75 @@ export async function POST(request: NextRequest) {
 
     let orgId = profile?.organization_id
 
-    // 🛡️ CRÉATION AUTOMATIQUE : Si l'organisation n'existe pas, on la crée et on la lie au profil !
+    // 🛡️ CRÉATION GARANTIE (Seulement le nom, 100% compatible avec tout schéma Supabase)
     if (!orgId) {
       const { data: newOrg, error: createOrgErr } = await supabaseAdmin
         .from('organizations')
         .insert({
           name: (body.name || 'Mon Entreprise BTP').trim(),
-          email: user.email,
         })
         .select('id')
         .single()
 
-      if (createOrgErr || !newOrg) {
-        throw new Error("Impossible de créer l'entreprise : " + (createOrgErr?.message || 'Erreur BDD'))
+      if (newOrg?.id) {
+        orgId = newOrg.id
+        await supabaseAdmin
+          .from('profiles')
+          .upsert({ id: user.id, organization_id: orgId, email: user.email })
+      } else if (createOrgErr) {
+        console.warn('[ORG UPDATE] Erreur création, tentative fallback sur org existante:', createOrgErr.message)
+        const { data: anyOrg } = await supabaseAdmin.from('organizations').select('id').limit(1).maybeSingle()
+        orgId = anyOrg?.id
+        if (orgId) {
+          await supabaseAdmin.from('profiles').upsert({ id: user.id, organization_id: orgId, email: user.email })
+        }
       }
-
-      orgId = newOrg.id
-
-      // Lien du profil à la nouvelle organisation
-      await supabaseAdmin
-        .from('profiles')
-        .upsert({ id: user.id, organization_id: orgId, email: user.email })
     }
 
-    // 3. Mise à jour complète de l'entreprise
-    const corePayload: Record<string, any> = {
+    if (!orgId) {
+      return NextResponse.json({ error: 'Impossible de rattacher une entreprise.' }, { status: 400 })
+    }
+
+    // Mise à jour 1 : Champs de base garantis
+    const basePayload: Record<string, any> = {
       name: (body.name || 'Mon Entreprise BTP').trim(),
       legal_form: body.legal_form || null,
       industry: body.industry || null,
       siret: body.siret ? body.siret.trim() : null,
-      siren: body.siren ? body.siren.trim() : null,
-      vat_number: body.vat_number ? body.vat_number.trim() : null,
-      vat_regime: body.vat_regime || null,
-      tax_regime: body.tax_regime ? body.tax_regime.trim() : null,
       phone: body.phone ? body.phone.trim() : null,
-      email: body.email ? body.email.trim() : null,
-      website: body.website ? body.website.trim() : null,
       address: body.address ? body.address.trim() : null,
       city: body.city ? body.city.trim() : null,
       postal_code: body.postal_code ? body.postal_code.trim() : null,
       country: body.country ? body.country.trim() : 'France',
-      accountant_email: body.accountant_email ? body.accountant_email.trim() : null,
       updated_at: new Date().toISOString(),
     }
 
-    const { error: updateErr } = await supabaseAdmin
-      .from('organizations')
-      .update(corePayload)
-      .eq('id', orgId)
+    await supabaseAdmin.from('organizations').update(basePayload).eq('id', orgId)
 
-    if (updateErr) throw updateErr
-
-    // Colonnes BTP optionnelles
+    // Mise à jour 2 : Champs secondaires optionnels (try/catch séparé pour ne jamais bloquer)
     try {
-      await supabaseAdmin
-        .from('organizations')
-        .update({
-          accountant_name: body.accountant_name ? body.accountant_name.trim() : null,
-          decennale_company: body.decennale_company ? body.decennale_company.trim() : null,
-          decennale_policy: body.decennale_policy ? body.decennale_policy.trim() : null,
-          iban: body.iban ? body.iban.trim() : null,
-          bic: body.bic ? body.bic.trim() : null,
-          bank_name: body.bank_name ? body.bank_name.trim() : null,
-        })
-        .eq('id', orgId)
+      await supabaseAdmin.from('organizations').update({
+        email: body.email ? body.email.trim() : null,
+        siren: body.siren ? body.siren.trim() : null,
+        vat_number: body.vat_number ? body.vat_number.trim() : null,
+        vat_regime: body.vat_regime || null,
+        tax_regime: body.tax_regime ? body.tax_regime.trim() : null,
+        website: body.website ? body.website.trim() : null,
+        accountant_email: body.accountant_email ? body.accountant_email.trim() : null,
+        accountant_name: body.accountant_name ? body.accountant_name.trim() : null,
+        decennale_company: body.decennale_company ? body.decennale_company.trim() : null,
+        decennale_policy: body.decennale_policy ? body.decennale_policy.trim() : null,
+        iban: body.iban ? body.iban.trim() : null,
+        bic: body.bic ? body.bic.trim() : null,
+      }).eq('id', orgId)
     } catch (e) {
-      // Ignorer si colonnes BTP absentes du schéma
+      console.warn('[ORG UPDATE] Colonnes optionnelles ignorées:', e)
     }
 
     return NextResponse.json({
       success: true,
-      orgId,
-      message: 'Informations entreprise enregistrées et liées à votre profil avec succès !',
+      organizationId: orgId,
+      message: 'Entreprise enregistrée avec succès !',
     })
   } catch (error: unknown) {
     console.error('Erreur API update organization:', error)

@@ -35,13 +35,12 @@ export async function POST(request: NextRequest) {
       return NextResponse.json({ error: 'Le nom de l\'entreprise est requis' }, { status: 400 })
     }
 
-    // Création organisation
+    // Création organisation (seulement name et siret, garantis universels)
     const { data: org, error: orgErr } = await supabaseAdmin
       .from('organizations')
       .insert({
         name: companyName.trim(),
         siret: siret ? siret.trim() : null,
-        email: user.email,
       })
       .select('id')
       .single()
