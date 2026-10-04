@@ -1,4 +1,4 @@
-'use client'
+﻿'use client'
 
 import { useState } from 'react'
 import { useRouter } from 'next/navigation'
@@ -8,136 +8,97 @@ import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import { Card, CardContent, CardDescription, CardFooter, CardHeader, CardTitle } from '@/components/ui/card'
-import { Loader2 } from 'lucide-react'
-import { signupSchema } from '@/lib/validation/schemas'
-import { validateRequest } from '@/lib/validation/schemas'
+import { Loader2, AlertCircle, CheckCircle2 } from 'lucide-react'
 
 export default function SignupPage() {
   const router = useRouter()
   const supabase = createClient()
 
-  const [fullName, setFullName] = useState('')
   const [email, setEmail] = useState('')
   const [password, setPassword] = useState('')
-  const [termsAccepted, setTermsAccepted] = useState(false)
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState<string | null>(null)
-  const [success, setSuccess] = useState(false)
+  const [success, setSuccess] = useState<string | null>(null)
 
   async function handleSubmit(e: React.FormEvent) {
     e.preventDefault()
     setLoading(true)
     setError(null)
+    setSuccess(null)
 
-    // Validation côté client avec le schema Zod
-    const validation = validateRequest(signupSchema, {
-      email,
-      password,
-      fullName,
-      termsAccepted,
-    })
-
-    if (!validation.success) {
-      // Afficher la première erreur trouvée
-      const failedValidation = validation as { success: false; errors: Record<string, string[]> };
-      const firstError = Object.values(failedValidation.errors)[0][0];
-      setError(firstError)
-      setLoading(false)
-      return
-    }
+    const cleanEmail = email.trim().toLowerCase()
+    
+    // URL de redirection dynamique (détecte si on est en prod sur Vercel ou en local)
+    const origin = typeof window !== 'undefined' ? window.location.origin : 'https://paperasse-ai-pi.vercel.app'
+    const redirectTo = `${origin}/onboarding`
 
     const { data, error: signUpError } = await supabase.auth.signUp({
-      email: validation.data.email,
-      password: validation.data.password,
+      email: cleanEmail,
+      password,
       options: {
-        data: {
-          full_name: validation.data.fullName,
-        },
+        emailRedirectTo: redirectTo,
       },
     })
 
     if (signUpError) {
-      setError(signUpError.message)
+      setError(signUpError.message || "Erreur lors de la création du compte")
       setLoading(false)
       return
     }
 
     if (data.user) {
-      // Si confirmation email désactivée, rediriger directement
       if (data.session) {
+        // Inscription directe sans confirmation obligatoire
         router.push('/onboarding')
       } else {
-        // Email de confirmation envoyé
-        setSuccess(true)
+        // Confirmation e-mail requise
+        setSuccess(`Compte créé avec succès ! Un e-mail de confirmation vient d'être envoyé à ${cleanEmail}. Cliquez sur le lien pour activer votre espace.`)
       }
     }
 
     setLoading(false)
   }
 
-  if (success) {return(
-      <div className="min-h-screen flex items-center justify-center bg-gray-50 px-4">
-        <Card className="w-full max-w-md">
-          <CardHeader className="text-center">
-            <CardTitle>Vérifiez votre email</CardTitle>
-            <CardDescription>
-              Un lien de confirmation a été envoyé à <strong>{email}</strong>.
-              Cliquez sur le lien pour activer votre compte.
-            </CardDescription>
-          </CardHeader>
-          <CardFooter className="justify-center">
-            <Link href="/login">
-              <Button variant="outline">Retour à la connexion</Button>
-            </Link>
-          </CardFooter>
-        </Card>
-      </div>
-    )
-  }
-
   return (
-    <div className="min-h-screen flex items-center justify-center bg-gray-50 px-4">
-      <Card className="w-full max-w-md">
-        <CardHeader className="text-center">
-          <CardTitle className="text-2xl">Créer un compte</CardTitle>
-          <CardDescription>
-            Commencez à organiser votre paperasse en quelques minutes
+    <div className="min-h-screen flex items-center justify-center bg-gray-50/80 px-4">
+      <Card className="w-full max-w-md shadow-lg border-gray-200/80">
+        <CardHeader className="text-center space-y-1">
+          <CardTitle className="text-2xl font-bold tracking-tight text-gray-900 font-sans">Créer un compte</CardTitle>
+          <CardDescription className="text-sm text-gray-500">
+            Démarrez vos 14 jours d'essai gratuit sur Paperasse.ai
           </CardDescription>
         </CardHeader>
 
         <form onSubmit={handleSubmit}>
-          <CardContent className="space-y-4">
+          <CardContent className="space-y-4 text-sm">
             {error && (
-              <div className="bg-red-50 text-red-600 text-sm p-3 rounded-md">
-                {error}
+              <div className="bg-red-50 text-red-700 text-xs p-3.5 rounded-xl border border-red-200 flex items-start gap-2.5">
+                <AlertCircle className="h-4 w-4 shrink-0 mt-0.5" />
+                <span className="leading-relaxed">{error}</span>
               </div>
             )}
 
-            <div className="space-y-2">
-              <Label htmlFor="fullName">Nom complet</Label>
-              <Input
-                id="fullName"
-                type="text"
-                placeholder="Jean Dupont"
-                value={fullName}
-                onChange={(e) => setFullName(e.target.value)}
-                required
-              />
-            </div>
+            {success && (
+              <div className="bg-emerald-50 text-emerald-700 text-xs p-3.5 rounded-xl border border-emerald-200 flex items-start gap-2.5 font-medium">
+                <CheckCircle2 className="h-4 w-4 shrink-0 mt-0.5 text-emerald-600" />
+                <span className="leading-relaxed">{success}</span>
+              </div>
+            )}
 
-            <div className="space-y-2">
-              <Label htmlFor="email">Email</Label>
+            <div className="space-y-1.5">
+              <Label htmlFor="email">Adresse e-mail professionnelle</Label>
               <Input
                 id="email"
                 type="email"
-                placeholder="jean@exemple.fr"
+                placeholder="artisan@exemple.fr"
                 value={email}
                 onChange={(e) => setEmail(e.target.value)}
                 required
+                className="bg-gray-50/50"
               />
             </div>
 
-            <div className="space-y-2">
+            <div className="space-y-1.5">
               <Label htmlFor="password">Mot de passe</Label>
               <Input
                 id="password"
@@ -145,45 +106,21 @@ export default function SignupPage() {
                 placeholder="••••••••"
                 value={password}
                 onChange={(e) => setPassword(e.target.value)}
-                minLength={8}
                 required
+                className="bg-gray-50/50"
               />
-              <p className="text-xs text-gray-500">
-                Minimum 8 caractères avec au moins une majuscule, une minuscule, un chiffre et un caractère spécial
-              </p>
-            </div>
-
-            <div className="flex items-start space-x-3 space-y-0 mt-4">
-              <div className="flex items-center h-5">
-                <input
-                  id="termsAccepted"
-                  type="checkbox"
-                  checked={termsAccepted}
-                  onChange={(e) => setTermsAccepted(e.target.checked)}
-                  required
-                  className="h-4 w-4 text-blue-600 focus:ring-blue-500 border-gray-300 rounded"
-                />
-              </div>
-              <div className="ml-2">
-                <Label htmlFor="termsAccepted" className="text-sm text-gray-700">
-                  J'accepte les{' '}
-                  <Link href="/terms" className="text-blue-600 hover:underline">
-                    conditions générales d'utilisation
-                  </Link>
-                </Label>
-              </div>
             </div>
           </CardContent>
 
           <CardFooter className="flex flex-col gap-4">
-            <Button type="submit" className="w-full" disabled={loading}>
+            <Button type="submit" className="w-full bg-amber-600 hover:bg-amber-700 text-white font-bold h-11" disabled={loading}>
               {loading && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
-              Créer mon compte
+              Créer mon compte BTP
             </Button>
 
             <p className="text-sm text-gray-600 text-center">
               Déjà un compte ?{' '}
-              <Link href="/login" className="text-blue-600 hover:underline">
+              <Link href="/login" className="text-amber-600 hover:underline font-semibold">
                 Se connecter
               </Link>
             </p>
